@@ -20,14 +20,11 @@ class RDSCalculator:
         # Check if this date already exists
         existing = [n for n in self.nighttime_temps if n['date'] == date]
         if existing:
-            # Update existing entry
             for n in self.nighttime_temps:
                 if n['date'] == date:
                     n['temp'] = night_temp
-                    print(f"  Updated temp for {date}: {night_temp}C")
                     break
         else:
-            # Add new entry
             self.nighttime_temps.append({
                 'date': date,
                 'temp': night_temp
@@ -134,6 +131,62 @@ class RDSCalculator:
             print(f"  Consecutive nights >=32C: {consecutive_nights} (not counting tonight if below threshold)\n")
         
         return total_rds, consecutive_nights
+
+    def apply_sleep_checkin_adjustment(self, rds, checkin=None):
+        """
+        Adjust RDS with structured user-reported sleep environment data.
+
+        This is deterministic and capped. The LLM may extract `checkin`, but it
+        should not decide the score.
+        """
+        if not checkin:
+            return rds, {
+                'applied': False,
+                'delta': 0.0,
+                'reason': 'no_checkin',
+                'adjusted_rds': rds,
+            }
+
+        sleep_environment = str(checkin.get('sleep_environment', '')).lower()
+        sleep_quality = str(checkin.get('sleep_quality', '')).lower()
+        cooling_issue = bool(checkin.get('cooling_issue', False))
+        power_issue = bool(checkin.get('power_issue', False))
+
+        delta = 0.0
+        reasons = []
+
+        if sleep_environment in {'comfortable', 'cool_enough'} or sleep_quality == 'good':
+            delta -= 10.0
+            reasons.append('comfortable_sleep_environment')
+        elif sleep_environment in {'warm_manageable', 'warm'} or sleep_quality == 'moderate':
+            delta += 5.0
+            reasons.append('warm_but_manageable')
+        elif sleep_environment in {'too_hot', 'cooling_unavailable'} or sleep_quality == 'poor':
+            delta += 20.0
+            reasons.append('poor_sleep_environment')
+
+        if cooling_issue:
+            delta += 10.0
+            reasons.append('cooling_issue')
+        if power_issue:
+            delta += 15.0
+            reasons.append('power_issue')
+
+        adjusted_rds = max(0.0, min(200.0, rds + delta))
+        return adjusted_rds, {
+            'applied': True,
+            'delta': round(adjusted_rds - rds, 1),
+            'reason': ','.join(reasons) if reasons else 'checkin_no_score_change',
+            'adjusted_rds': round(adjusted_rds, 1),
+            'raw_rds': round(rds, 1),
+        }
+
+    def estimate_recovery_confidence(self, checkin=None):
+        if checkin:
+            return 'HIGH'
+        if len(self.nighttime_temps) >= 3:
+            return 'MEDIUM'
+        return 'LOW'
     
     def get_rds_message(self, outdoor_temp=None):
         """
@@ -199,7 +252,7 @@ class RDSCalculator:
             elif last_night_temp < 34:
                 return f"Recovery debt: {base_level} (outdoor temp {last_night_temp:.1f}C - if your home stayed above 32C, partial recovery failure, RDS: {rds:.1f})", base_color
             else:
-                return f"Recovery debt: {base_level} (outdoor temp {last_night_temp:.1f}C - if your home stayed above 32C, your body did not recover, RDS: {rds:.1f})", base_color
+                return f"Recovery debt: {base_level} (outdoor temp {last_night_temp:.1f}C - recovery may be impaired if your room stayed above 32C, RDS: {rds:.1f})", base_color
     
     def estimate_nighttime_temp_from_forecast(self, weather_forecast):
         """
@@ -230,20 +283,8 @@ class RDSCalculator:
                     night_temps.append((item['timestamp'], item['temp']))
         
         if not night_temps:
-            # Fallback: use minimum temp from next 24 hours
-            print("  WARNING: No specific nighttime forecast found, using 24hr minimum")
-            all_temps = [item['temp'] for item in weather_forecast[:8]]  # Next 24 hours
-            estimated = min(all_temps) if all_temps else None
-            if estimated:
-                print(f"  [OK] Using 24hr minimum: {estimated:.1f}C")
-            return estimated
-        
-        estimated = min([temp for _, temp in night_temps])
-        times_str = ", ".join([t.strftime('%H:%M') for t, _ in night_temps])
-        print(f"  [OK] Tonight's minimum from {len(night_temps)} forecast points ({times_str}): {estimated:.1f}C")
-        
-        if len(night_temps) < 4:
-            print(f"      Note: Only {len(night_temps)} samples across night - actual minimum may differ by ~1C")
-        
-        return estimated
+            all_temps = [item['temp'] for item in weather_forecast[:8]]
+            return min(all_temps) if all_temps else None
+
+        return min(temp for _, temp in night_temps)
 

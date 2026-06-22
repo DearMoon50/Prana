@@ -1,12 +1,13 @@
 """FastAPI backend for the PRANA mobile app."""
 
 from contextlib import redirect_stdout
+from datetime import datetime
 from io import StringIO
 from pathlib import Path
 import sys
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
@@ -36,11 +37,16 @@ class RiskRequest(BaseModel):
         le=8,
         description="Ward-level urban heat island offset in Celsius.",
     )
+    sleep_checkin: Optional[dict] = Field(
+        None, description="Structured sleep check-in from WhatsApp."
+    )
 
 
 class RiskResponse(BaseModel):
     result: Dict[str, Any]
     calculation_log: str
+
+    model_config = {"json_encoders": {datetime: lambda v: v.isoformat()}}
 
 
 @app.get("/health")
@@ -64,13 +70,13 @@ async def calculate_current_risk(payload: RiskRequest) -> RiskResponse:
     if not result:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Could not calculate risk. Check API keys, coordinates, and upstream services.",
+            detail="Could not calculate risk. Check coordinates and upstream services.",
         )
 
-    return RiskResponse(result=result, calculation_log=logs)
+    return RiskResponse(result=_serialize_result(result), calculation_log=logs)
 
 
-def _run_prana_pipeline(payload: RiskRequest) -> tuple[Optional[Dict[str, Any]], str]:
+def _run_prana_pipeline(payload: RiskRequest):
     prana = PRANASystem(
         api_key=OPENWEATHER_API_KEY,
         location_name=payload.location_name,
@@ -80,6 +86,17 @@ def _run_prana_pipeline(payload: RiskRequest) -> tuple[Optional[Dict[str, Any]],
 
     stdout = StringIO()
     with redirect_stdout(stdout):
-        result = prana.update_all(payload.lat, payload.lon)
+        result = prana.update_all(payload.lat, payload.lon, sleep_checkin=payload.sleep_checkin)
 
     return result, stdout.getvalue()
+
+
+def _serialize_result(result: dict) -> dict:
+    """Recursively convert datetime objects to ISO strings for JSON serialization."""
+    if isinstance(result, dict):
+        return {k: _serialize_result(v) for k, v in result.items()}
+    if isinstance(result, list):
+        return [_serialize_result(v) for v in result]
+    if isinstance(result, datetime):
+        return result.isoformat()
+    return result

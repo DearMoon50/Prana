@@ -53,8 +53,28 @@ class CCRICalculator:
             return self._linear_scale(ha_aqi, 150, 200, 60, 80)
         else:
             return min(100, self._linear_scale(ha_aqi, 200, 300, 80, 100))
+
+    def calculate_recovery_score(self, rds):
+        """Convert RDS into a capped 0-100 component score."""
+        return max(0, min(100, rds))
+
+    def calculate_component_scores(self, ndt, ha_aqi, rds):
+        """Return transparent CCRI component scores and multiplier."""
+        heat_score = self.calculate_heat_score(ndt)
+        pollution_score = self.calculate_pollution_score(ha_aqi) if ha_aqi else 20
+        recovery_score = self.calculate_recovery_score(rds)
+        base_ccri = (heat_score * pollution_score) / 100
+        recovery_multiplier = 1 + (recovery_score / 100) * 0.3
+
+        return {
+            'heat_score': heat_score,
+            'pollution_score': pollution_score,
+            'recovery_score': recovery_score,
+            'base_ccri': base_ccri,
+            'recovery_multiplier': recovery_multiplier,
+        }
     
-    def calculate_ccri(self, ndt, ha_aqi, rds, debug=True):
+    def calculate_ccri(self, ndt, ha_aqi, rds, debug=False):
         """
         Calculate Compound Climate Risk Index
         
@@ -71,14 +91,15 @@ class CCRICalculator:
         Returns:
             CCRI value (0-100+) and risk level
         """
-        h_score = self.calculate_heat_score(ndt)
-        p_score = self.calculate_pollution_score(ha_aqi) if ha_aqi else 20  # Default moderate if no data
+        component_scores = self.calculate_component_scores(ndt, ha_aqi, rds)
+        h_score = component_scores['heat_score']
+        p_score = component_scores['pollution_score']
         
         # Base compound risk (multiplicative)
-        base_ccri = (h_score * p_score) / 100  # Normalize to 0-100 scale
+        base_ccri = component_scores['base_ccri']
         
         # Amplify by recovery debt
-        rds_multiplier = 1 + (rds / 100) * 0.3  # Max 30% amplification
+        rds_multiplier = component_scores['recovery_multiplier']
         
         ccri = base_ccri * rds_multiplier
         

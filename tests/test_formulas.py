@@ -16,19 +16,9 @@ class AQIComponentTests(unittest.TestCase):
 
     def test_provider_us_aqi_preserved_with_components(self):
         pollutants = {
-            'us_aqi': {
-                'value': 78,
-                'unit': 'AQI',
-                'source': 'open-meteo-cams',
-            },
-            'pm2.5': {
-                'value': 18,
-                'unit': 'ug/m3',
-            },
-            'o3': {
-                'value': 80,
-                'unit': 'ug/m3',
-            },
+            'us_aqi': {'value': 78, 'unit': 'AQI', 'source': 'open-meteo-cams'},
+            'pm2.5': {'value': 18, 'unit': 'ug/m3'},
+            'o3': {'value': 80, 'unit': 'ug/m3'},
         }
 
         result = self.fetcher.calculate_pollutant_aqi_components(pollutants)
@@ -37,6 +27,39 @@ class AQIComponentTests(unittest.TestCase):
         self.assertEqual(result['source'], 'open-meteo-cams')
         self.assertIn('PM2.5', result['pollutant_aqi'])
         self.assertIn('O3', result['pollutant_aqi'])
+        self.assertIn('averaging_windows', result)
+
+    def test_pm25_nowcast_uses_weighted_average(self):
+        from data_fetcher import _pm25_nowcast
+        # Uniform values -> NowCast == the value itself
+        self.assertAlmostEqual(_pm25_nowcast([20.0] * 12), 20.0, places=3)
+
+    def test_pm25_nowcast_weights_recent_higher(self):
+        from data_fetcher import _pm25_nowcast
+        # Spike in most recent hour should pull average up vs older hours
+        older = [10.0] * 11
+        recent = [80.0]
+        nowcast = _pm25_nowcast(older + recent)
+        self.assertGreater(nowcast, 10.0)
+        self.assertLess(nowcast, 80.0)
+
+    def test_pm25_nowcast_applied_when_history_present(self):
+        pollutants = {
+            'pm2.5': {
+                'value': 50.0,
+                'unit': 'ug/m3',
+                'history_12h': [10.0] * 11 + [50.0],
+            }
+        }
+        result = self.fetcher.calculate_pollutant_aqi_components(pollutants)
+        self.assertEqual(result['averaging_windows'].get('PM2.5'), 'nowcast_12h')
+
+    def test_pm25_instantaneous_when_no_history(self):
+        pollutants = {
+            'pm2.5': {'value': 18.0, 'unit': 'ug/m3'}
+        }
+        result = self.fetcher.calculate_pollutant_aqi_components(pollutants)
+        self.assertEqual(result['averaging_windows'].get('PM2.5'), 'instantaneous')
 
 
 class HeatPollutionRiskTests(unittest.TestCase):
@@ -86,6 +109,41 @@ class RDSTests(unittest.TestCase):
 
         self.assertEqual(rds, 0.0)
         self.assertEqual(consecutive, 0)
+
+
+class NDTTests(unittest.TestCase):
+    def setUp(self):
+        from ndt_calculator import NDTCalculator
+        self.calculator = NDTCalculator(urban_heat_offset=0)
+
+    def test_wbgt_formula_weights(self):
+        # With wet_bulb=30, globe=35, dry=33 -> 0.7*30 + 0.2*35 + 0.1*33 = 21+7+3.3 = 31.3
+        result = self.calculator.calculate_wbgt(
+            temp_c=33, humidity_percent=70,
+            wet_bulb_temp=30, wind_speed_ms=0.5,
+            shortwave_radiation=None,
+        )
+        # globe estimated internally; just check it returns a float in range
+        self.assertIsInstance(result, float)
+        self.assertGreater(result, 20)
+        self.assertLess(result, 45)
+
+    def test_urban_heat_offset_added(self):
+        from ndt_calculator import NDTCalculator
+        base = NDTCalculator(urban_heat_offset=0).calculate_ndt(
+            {'temp': 33, 'humidity': 70, 'wind_speed': 0.5}
+        )
+        offset = NDTCalculator(urban_heat_offset=3).calculate_ndt(
+            {'temp': 33, 'humidity': 70, 'wind_speed': 0.5}
+        )
+        self.assertAlmostEqual(offset - base, 3.0, places=5)
+
+    def test_heat_stress_levels(self):
+        self.assertEqual(self.calculator.get_heat_stress_level(26)[0], 'LOW')
+        self.assertEqual(self.calculator.get_heat_stress_level(28)[0], 'MODERATE')
+        self.assertEqual(self.calculator.get_heat_stress_level(31)[0], 'HIGH')
+        self.assertEqual(self.calculator.get_heat_stress_level(33)[0], 'VERY HIGH')
+        self.assertEqual(self.calculator.get_heat_stress_level(36)[0], 'EXTREME')
 
 
 class CCRITests(unittest.TestCase):
