@@ -191,3 +191,7 @@ Optional:
 - Added `FORMULA_VALIDATION.md` to distinguish official methods, approximations, PRANA custom formulas, and prototype assumptions.
 - Refactored heat-pollution scoring so heat adjusts ozone-specific risk instead of multiplying the full AQI.
 - Added formula regression tests for AQI components, heat-pollution risk, RDS, and CCRI.
+- Replaced `max(base_aqi, ozone_heat_adjusted_aqi)` with weighted blend `base_aqi + (ozone_heat_adjusted_aqi - ozone_aqi) * OAF_BLEND_WEIGHT` ensuring nonzero heat coupling on all days regardless of dominant pollutant.
+- Added `uhi_lookup.py` — static UHI offset lookup for 6 demo cities (HCMC, Chennai, Dhaka, Karachi, Manila, Jakarta) with district-level values. Wired into `PRANASystem.__init__` as automatic fallback when `urban_heat_offset` is not provided.
+- Added optional onboarding-derived indoor temp offset to RDS: AC (-3°C), tin roof (+2°C), top floor (+1.5°C). Fully backward compatible — no onboarding data = exact same calculation as before.
+- Added `scripts/ccri_rds_sensitivity.py` — standalone sensitivity analysis showing CCRI spread attributable to RDS across 25 heat/pollution/RDS combinations for review of the 0.3 ceiling.

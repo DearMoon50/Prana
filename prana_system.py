@@ -16,15 +16,19 @@ from ha_aqi_calculator import HAAQICalculator
 from rds_calculator import RDSCalculator
 from ccri_calculator import CCRICalculator
 from config import *
+from uhi_lookup import lookup_uhi_offset
 
 
 class PRANASystem:
-    def __init__(self, api_key=None, location_name="your ward", urban_heat_offset=3.0, openaq_api_key=None):
+    def __init__(self, api_key=None, location_name="your ward", urban_heat_offset=None, openaq_api_key=None, onboarding_data=None):
         self.location_name = location_name
+        self.onboarding_data = onboarding_data
+        if urban_heat_offset is None:
+            urban_heat_offset = lookup_uhi_offset(location_name)
         self.data_fetcher = DataFetcher(api_key, openaq_api_key)
         self.ndt_calculator = NDTCalculator(urban_heat_offset)
         self.ha_aqi_calculator = HAAQICalculator()
-        self.rds_calculator = RDSCalculator()
+        self.rds_calculator = RDSCalculator(onboarding_data)
         self.ccri_calculator = CCRICalculator()
 
         self.current_ndt = None
@@ -249,6 +253,7 @@ class PRANASystem:
                 },
                 'recovery': {
                     'label': 'RDS',
+                    'description': 'outdoor_nighttime_recovery_risk_proxy',
                     'value': round(result['rds'], 1),
                     'raw_value': round(result['raw_rds'], 1),
                     'unit': 'score',

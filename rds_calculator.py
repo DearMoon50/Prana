@@ -3,8 +3,37 @@ from datetime import datetime
 from config import *
 
 class RDSCalculator:
-    def __init__(self):
+    def __init__(self, onboarding_data=None):
         self.nighttime_temps = []  # Store last 7 nights
+        self.onboarding_data = onboarding_data  # Optional dict with ac, roof_material, floor_level
+
+    @staticmethod
+    def compute_onboarding_temp_offset(onboarding_data):
+        """
+        Compute effective indoor temperature offset from onboarding categorical inputs.
+
+        Offsets are applied to outdoor nighttime temp before RFU threshold check.
+        All values are PROTOTYPE_ASSUMPTION — not empirically validated.
+
+        Args:
+            onboarding_data: dict with keys 'ac' (bool), 'roof_material' (str),
+                             'floor_level' (str), or None.
+
+        Returns:
+            float: total temperature offset in degC (negative = cooler, positive = hotter).
+        """
+        if not onboarding_data:
+            return 0.0
+        offset = 0.0
+        if onboarding_data.get('ac'):
+            offset += RDS_ONBOARDING_AC_OFFSET
+        roof = onboarding_data.get('roof_material', '').lower()
+        if roof == 'tin':
+            offset += RDS_ONBOARDING_TIN_ROOF_OFFSET
+        floor = onboarding_data.get('floor_level', '').lower()
+        if floor == 'top':
+            offset += RDS_ONBOARDING_TOP_FLOOR_OFFSET
+        return round(offset, 1)
     
     def add_night_temperature(self, night_temp, date=None):
         """
@@ -33,103 +62,89 @@ class RDSCalculator:
         # Keep only last 7 nights
         self.nighttime_temps = sorted(self.nighttime_temps, key=lambda x: x['date'], reverse=True)[:RDS_MAX_DAYS]
     
-    def calculate_recovery_factor(self, night_temp):
+    def calculate_recovery_factor(self, night_temp, indoor_offset=0.0):
         """
         Calculate recovery factor for a single night
-        
+
         RFU (Recovery Failure Units):
-        - Below 32C: RFU = 0 (full recovery possible)
-        - Above 32C: RFU increases exponentially
-        
-        Based on Obradovich et al. (2017): 
+        - Below 32C (effective): RFU = 0 (full recovery possible)
+        - Above 32C (effective): RFU increases linearly
+
+        Based on Obradovich et al. (2017):
         Every 10C rise increases sleep insufficiency by 20.1%
-        
+
         Args:
-            night_temp: Nighttime temperature (C)
-        
+            night_temp: Nighttime outdoor temperature (C)
+            indoor_offset: Effective indoor temperature offset (degC).
+                           Positive = hotter indoors, Negative = cooler indoors.
+
         Returns:
             Recovery Failure Units (0-100)
         """
-        if night_temp < RDS_NIGHTTIME_THRESHOLD:
+        effective_temp = night_temp + indoor_offset
+        if effective_temp < RDS_NIGHTTIME_THRESHOLD:
             return 0.0
-        
-        # Calculate excess temperature above threshold
-        temp_excess = night_temp - RDS_NIGHTTIME_THRESHOLD
-        
-        # Exponential increase in recovery failure
-        # At 32C: RFU = 0
-        # At 35C: RFU around 25
-        # At 38C: RFU around 50
-        # At 42C: RFU = 100 (complete failure)
+
+        temp_excess = effective_temp - RDS_NIGHTTIME_THRESHOLD
         rfu = min(100, (temp_excess / 10) * 100)
-        
+
         return rfu
     
-    def calculate_rds(self, debug=False):
+    def calculate_rds(self, debug=False, onboarding_data=None):
         """
         Calculate cumulative Recovery Debt Score
-        
+
         RDS = sum(RFU x 0.8^days_ago)
-        
+
         Recent nights weighted more heavily, exponential decay for older nights
-        
+
         Args:
             debug: If True, print per-night breakdown
-        
+            onboarding_data: Optional dict with 'ac', 'roof_material', 'floor_level'
+                             for effective indoor temperature adjustment.
+
         Returns:
             RDS value (0-100+) and number of consecutive nights without recovery
         """
         if not self.nighttime_temps:
             return 0.0, 0
-        
+
+        indoor_offset = self.compute_onboarding_temp_offset(onboarding_data or self.onboarding_data)
         total_rds = 0.0
         consecutive_nights = 0
-        first_hot_night_days_ago = -1  # Track where the consecutive streak starts
+        first_hot_night_days_ago = -1
         today = datetime.now().date()
-        
+
         if debug:
             print(f"\n  RDS Calculation Breakdown:")
-            print(f"  {'Date':<12} {'Temp':<8} {'RFU':<8} {'Days Ago':<10} {'Weight':<10} {'Contribution':<12}")
-            print(f"  {'-'*70}")
-        
-        # Sort by date descending (most recent first)
+            print(f"  {'Date':<12} {'Temp':<8} {'Offset':<8} {'Eff Temp':<9} {'RFU':<8} {'Days Ago':<10} {'Weight':<10} {'Contribution':<12}")
+            print(f"  {'-'*90}")
+
         sorted_nights = sorted(self.nighttime_temps, key=lambda x: x['date'], reverse=True)
-        
         for i, night in enumerate(sorted_nights):
             days_ago = (today - night['date']).days
-            rfu = self.calculate_recovery_factor(night['temp'])
-            
-            # Apply exponential decay
+            effective_temp = night['temp'] + indoor_offset
+            rfu = self.calculate_recovery_factor(night['temp'], indoor_offset)
             weight = RDS_DECAY_FACTOR ** days_ago
             contribution = rfu * weight
             total_rds += contribution
-            
             if debug:
                 date_str = night['date'].strftime('%Y-%m-%d')
                 if days_ago == 0:
                     date_str += " (tonight)"
-                print(f"  {date_str:<12} {night['temp']:.1f}C  {rfu:>6.1f}  {days_ago:>9}  {weight:>9.3f}  {contribution:>11.1f}")
-            
-            # Count consecutive nights above threshold
-            # We process ALL nights for RDS calculation but track consecutive hot nights
-            if night['temp'] >= RDS_NIGHTTIME_THRESHOLD:
-                # This night is hot
+                print(f"  {date_str:<12} {night['temp']:.1f}C  {indoor_offset:>+7.1f}  {effective_temp:>7.1f}C  {rfu:>6.1f}  {days_ago:>9}  {weight:>9.3f}  {contribution:>11.1f}")
+            if effective_temp >= RDS_NIGHTTIME_THRESHOLD:
                 if consecutive_nights == 0:
-                    # First hot night found (either tonight or historical)
-                    # Start the streak and record where it starts
                     consecutive_nights = 1
                     first_hot_night_days_ago = days_ago
                 elif days_ago == first_hot_night_days_ago + consecutive_nights:
-                    # This hot night continues the streak backwards
                     consecutive_nights += 1
-                # else: gap in the streak, don't increment
-            # Continue loop regardless to calculate RDS from all nights
-        
+
         if debug:
-            print(f"  {'-'*70}")
+            print(f"  {'-'*90}")
+            print(f"  Indoor offset applied: {indoor_offset:+.1f}C")
             print(f"  Total RDS: {total_rds:.1f}")
-            print(f"  Consecutive nights >=32C: {consecutive_nights} (not counting tonight if below threshold)\n")
-        
+            print(f"  Consecutive nights (effective >=32C): {consecutive_nights}\n")
         return total_rds, consecutive_nights
 
     def apply_sleep_checkin_adjustment(self, rds, checkin=None):
@@ -191,16 +206,16 @@ class RDSCalculator:
     def get_rds_message(self, outdoor_temp=None):
         """
         Get human-readable recovery debt message as a range
-        
+
         Since we don't know indoor temperature, we output RDS as a range based on outdoor temp.
-        
+
         Args:
             outdoor_temp: Last night's outdoor minimum temperature (C)
-        
+
         Returns:
             Tuple of (message, color_code)
         """
-        rds, consecutive_nights = self.calculate_rds()
+        rds, consecutive_nights = self.calculate_rds(onboarding_data=self.onboarding_data)
         
         if not self.nighttime_temps:
             return "Recovery data unavailable", "UNKNOWN"

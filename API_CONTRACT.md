@@ -100,6 +100,7 @@ Response:
       },
       "recovery": {
         "label": "RDS",
+        "description": "outdoor_nighttime_recovery_risk_proxy",
         "value": 66.1,
         "raw_value": 66.1,
         "unit": "score",
@@ -159,7 +160,8 @@ Response:
 ### Field notes
 
 - `timestamp` is always an ISO 8601 string (e.g. `"2026-06-21T20:30:00"`).
-- `components.heat.description` is always `"estimated_wbgt_plus_urban_offset"`. NDT is a PRANA custom score, not an official WBGT measurement.
+- `components.heat.description` is always `"estimated_wbgt_plus_urban_offset"`. NDT is a PRANA custom score, not an official WBGT measurement. The urban heat offset is a per-location estimate, not ward/building-level measurement.
+- `components.recovery.description` is always `"outdoor_nighttime_recovery_risk_proxy"`. RDS uses outdoor nighttime temperature as a proxy; it is not a measured indoor or personal recovery score.
 - `components.air_quality.averaging_windows` describes the averaging method used per pollutant:
   - `"nowcast_12h"` — EPA NowCast weighted average over up to 12 hourly values (used for PM2.5 when history is available).
   - `"instantaneous"` — single reading, not a full official averaging window.

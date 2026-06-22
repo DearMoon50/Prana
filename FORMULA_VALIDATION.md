@@ -37,6 +37,36 @@ Implementation rule:
 - API responses should describe NDT as `estimated_wbgt_plus_urban_offset`.
 - Always expose source and confidence.
 
+## Urban Heat Island Offset Lookup
+
+Status: `PUBLISHED_APPROXIMATION` (values from published UHI studies; not from real-time satellite ingestion)
+
+Data source: `uhi_lookup.py` — static dictionary of city/district → estimated UHI offset (degC).
+
+Last updated: 2026-06-22
+
+Demo cities covered:
+
+| City | Country | Default offset (°C) | Districts |
+|------|---------|---------------------|-----------|
+| Ho Chi Minh City | Vietnam | 3.5 | 22 |
+| Chennai | India | 3.0 | 18 |
+| Dhaka | Bangladesh | 4.0 | 15 |
+| Karachi | Pakistan | 3.0 | 15 |
+| Manila | Philippines | 3.5 | 31 |
+| Jakarta | Indonesia | 4.0 | 18 |
+
+Behaviour:
+
+- `PRANASystem.__init__` calls `lookup_uhi_offset(location_name)` when `urban_heat_offset` is not explicitly provided.
+- Function matches city name then district name (case-insensitive substring).
+- Falls back to manual default (3.0 °C) if no match.
+
+Implementation rule:
+
+- Document this as a prototype convenience, not real-time satellite measurement.
+- The district-level values are coarse estimates; refine with localised LST analysis before production.
+
 ## Base AQI
 
 Status: `STANDARD` when using official provider AQI; `PUBLISHED_APPROXIMATION` when calculated from pollutant breakpoints.
@@ -72,13 +102,16 @@ Problem:
 - Heat mainly affects ozone chemistry; multiplying the full AQI can wrongly amplify PM2.5 or PM10 risk.
 - `HA-AQI` sounds like an official AQI, but it is a PRANA risk adjustment.
 
-Updated direction:
+Updated direction (v2):
 
 ```text
 ozone_heat_factor = 1 + 0.04 * max(0, temp_c - 25)
 ozone_heat_adjusted_aqi = ozone_aqi * ozone_heat_factor
-heat_pollution_risk = max(base_aqi, ozone_heat_adjusted_aqi)
+heat_driven_increment = (ozone_heat_adjusted_aqi - ozone_aqi) * OAF_BLEND_WEIGHT
+heat_pollution_risk = base_aqi + heat_driven_increment
 ```
+
+`OAF_BLEND_WEIGHT = 0.5` in config.py (2026-06-22). The heat-driven ozone increment is blended at 50 % onto base AQI, so every day with nonzero ozone and nonzero temperature excess gets some heat coupling.
 
 Implementation rule:
 
@@ -114,12 +147,40 @@ Limitations:
 - PRANA does not directly measure indoor temperature.
 - Outdoor temperature can understate indoor heat in low-ventilation housing.
 - RDS should be described as a recovery-risk estimate unless user check-ins or sensors improve confidence.
+- Onboarding-derived indoor offset (AC: -3°C, tin roof: +2°C, top floor: +1.5°C) is a `PROTOTYPE_ASSUMPTION` — not empirically validated.
 
 Implementation rule:
 
 - Use careful language: "recovery may be impaired", not "your body did not recover".
 - Add WhatsApp check-ins only when nighttime heat risk or uncertainty is elevated.
 - Use LLM only to extract structured feedback; final RDS calculation remains deterministic.
+- Onboarding adjustment is fully optional: `RDSCalculator(onboarding_data=None)` computes exactly as before.
+
+## RDS Onboarding Adjustment (Indoor Proxy)
+
+Status: `PROTOTYPE_ASSUMPTION`
+
+Added 2026-06-22.
+
+Formula:
+
+```text
+indoor_offset = (AC ? -3.0 : 0.0) + (roof_material == 'tin' ? +2.0 : 0.0) + (floor_level == 'top' ? +1.5 : 0.0)
+effective_temp = outdoor_night_temp + indoor_offset
+```
+
+The offset is applied before the existing 32 °C RFU threshold.
+
+| Input | Value | Effect |
+|-------|-------|--------|
+| `ac: true` | −3.0 °C | Mechanical cooling lowers effective indoor temp |
+| `roof_material: 'tin'` | +2.0 °C | Tin roof heats up faster than concrete |
+| `floor_level: 'top'` | +1.5 °C | Top floor receives more roof-transmitted heat |
+
+Constants in `config.py`:
+- `RDS_ONBOARDING_AC_OFFSET = -3.0`
+- `RDS_ONBOARDING_TIN_ROOF_OFFSET = 2.0`
+- `RDS_ONBOARDING_TOP_FLOOR_OFFSET = 1.5`
 
 ## CCRI: Compound Climate Risk Index
 
@@ -147,6 +208,24 @@ Implementation rule:
 
 - Always label CCRI as a PRANA custom score.
 - Return component scores, multipliers, confidence, and limitations.
+
+CCRI RDS weighting (current constant `0.3`):
+
+See `scripts/ccri_rds_sensitivity.py` for the full sensitivity table.
+Key findings (2026-06-22):
+
+| Metric | Value |
+|--------|-------|
+| Average RDS spread | 8.1 CCRI points |
+| Max RDS spread | 22.7 CCRI points |
+| Min RDS spread | 1.3 CCRI points |
+| Tier changes (RDS 0→100) | 7/25 = 28% of scenarios |
+
+The 0.3 constant caps RDS influence between 1.0× and 1.3×, allowing a
+meaningful swing on extreme days but a small one on mild days.
+Whether 0.3 should be raised depends on calibration against real
+outcome data — the sensitivity script provides the raw numbers for
+that decision.
 
 ## Immediate Formula Work
 

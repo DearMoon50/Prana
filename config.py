@@ -42,11 +42,15 @@ WBGT_TD_COEFF = 0.1  # Dry bulb temperature
 # Ozone Amplification Factor (Shen et al. 2020)
 OAF_BASE_TEMP = 25.0  # Celsius
 OAF_COEFFICIENT = 0.04
+OAF_BLEND_WEIGHT = 0.5  # Weight for heat-driven ozone increment blended into base AQI
 
 # Recovery Debt Score
 RDS_NIGHTTIME_THRESHOLD = 32.0  # Celsius - no recovery above this
 RDS_DECAY_FACTOR = 0.8  # Exponential decay for past nights
 RDS_MAX_DAYS = 7  # Track last 7 nights
+RDS_ONBOARDING_AC_OFFSET = -3.0  # degC: effective indoor temp reduction from AC (PROTOTYPE_ASSUMPTION)
+RDS_ONBOARDING_TIN_ROOF_OFFSET = 2.0  # degC: additional indoor heat from tin roof (PROTOTYPE_ASSUMPTION)
+RDS_ONBOARDING_TOP_FLOOR_OFFSET = 1.5  # degC: additional indoor heat from top floor unshaded (PROTOTYPE_ASSUMPTION)
 
 # CCRI Thresholds
 CCRI_SAFE = 20

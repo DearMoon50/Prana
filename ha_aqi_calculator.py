@@ -40,7 +40,12 @@ class HAAQICalculator:
         ozone_heat_factor = self.calculate_ozone_amplification_factor(temp_c)
         ozone_aqi = pollutant_aqi.get('O3')
         ozone_heat_adjusted_aqi = ozone_aqi * ozone_heat_factor if ozone_aqi is not None else None
-        heat_pollution_risk = max(base_aqi, ozone_heat_adjusted_aqi or 0)
+
+        if ozone_aqi is not None and ozone_heat_adjusted_aqi is not None:
+            ozone_increment = (ozone_heat_adjusted_aqi - ozone_aqi) * OAF_BLEND_WEIGHT
+            heat_pollution_risk = base_aqi + ozone_increment
+        else:
+            heat_pollution_risk = base_aqi
 
         return {
             'base_aqi': base_aqi,

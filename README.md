@@ -1,6 +1,6 @@
 # PRANA
 
-PRANA is a compound climate-risk platform for heat, air quality, and nighttime recovery risk. The mobile app captures the user's location and shows live/past risk results. The backend calculates risk scores and is designed to support WhatsApp alerts, recovery check-ins, and health-worker escalation.
+PRANA is a compound climate-risk platform for heat, air quality, and outdoor-nighttime-based recovery risk. The mobile app captures the user's location and shows live/past risk results. The backend calculates risk scores and is designed to support WhatsApp alerts, recovery check-ins, and health-worker escalation.
 
 ## Current Status
 
