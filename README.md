@@ -58,29 +58,36 @@ OpenWeatherMap and OpenAQ keys are not required for local development.
 
 ## Backend Setup
 
-Create or reuse a virtual environment:
+### Local (PowerShell)
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-```
-
-Create local environment config:
-
-```powershell
 Copy-Item .env.example .env
-```
-
-Start the backend:
-
-```powershell
 .\scripts\start_backend.ps1
 ```
 
-Or run directly:
+### Local (Linux)
 
-```powershell
-.\.venv\Scripts\python.exe -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+uvicorn backend.main:app --host 0.0.0.0 --port 8000
+```
+
+### Docker
+
+```bash
+docker build -t prana-backend .
+docker run -d --name prana-backend --restart unless-stopped -p 8000:8000 --env-file .env prana-backend
+```
+
+Or use the deploy script:
+
+```bash
+./scripts/deploy.sh
 ```
 
 Local API docs:
