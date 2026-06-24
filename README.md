@@ -4,7 +4,7 @@ PRANA is a compound climate-risk platform for heat, air quality, and outdoor-nig
 
 ## Current Status
 
-This repository currently contains:
+This repository contains:
 
 - Flutter mobile app in `mobile_app/`
 - Python FastAPI backend in `backend/`
