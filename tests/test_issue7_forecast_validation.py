@@ -2,7 +2,7 @@
 
 import unittest
 from datetime import datetime, timedelta
-from rds_calculator import RDSCalculator
+from prana.rds_calculator import RDSCalculator
 
 
 class TestIssue7ForecastTimestampValidation(unittest.TestCase):

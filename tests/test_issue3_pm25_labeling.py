@@ -1,7 +1,7 @@
 """Test Issue 3 fix: PM2.5 NowCast vs instantaneous labeling"""
 
 import unittest
-from ccri_calculator import CCRICalculator
+from prana.ccri_calculator import CCRICalculator
 
 
 class TestIssue3PM25Labeling(unittest.TestCase):

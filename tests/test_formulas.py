@@ -1,12 +1,12 @@
 import unittest
 from datetime import date, datetime, timedelta
 
-from ccri_calculator import CCRICalculator
-from data_fetcher import DataFetcher
-from ha_aqi_calculator import HAAQICalculator
-from ndt_calculator import NDTCalculator
-from prana_system import PRANASystem
-from rds_calculator import RDSCalculator
+from prana.ccri_calculator import CCRICalculator
+from prana.data_fetcher import DataFetcher
+from prana.ha_aqi_calculator import HAAQICalculator
+from prana.ndt_calculator import NDTCalculator
+from prana.prana_system import PRANASystem
+from prana.rds_calculator import RDSCalculator
 
 
 class AQIComponentTests(unittest.TestCase):
@@ -32,12 +32,12 @@ class AQIComponentTests(unittest.TestCase):
         self.assertIn('averaging_windows', result)
 
     def test_pm25_nowcast_uses_weighted_average(self):
-        from data_fetcher import _pm25_nowcast
+        from prana.data_fetcher import _pm25_nowcast
         # Uniform values -> NowCast == the value itself
         self.assertAlmostEqual(_pm25_nowcast([20.0] * 12), 20.0, places=3)
 
     def test_pm25_nowcast_weights_recent_higher(self):
-        from data_fetcher import _pm25_nowcast
+        from prana.data_fetcher import _pm25_nowcast
         # Spike in most recent hour should pull average up vs older hours
         older = [10.0] * 11
         recent = [80.0]
@@ -225,7 +225,7 @@ class RDSTests(unittest.TestCase):
 
 class NDTTests(unittest.TestCase):
     def setUp(self):
-        from ndt_calculator import NDTCalculator
+        from prana.ndt_calculator import NDTCalculator
         self.calculator = NDTCalculator(urban_heat_offset=0)
 
     def test_wbgt_formula_weights_exact(self):
@@ -254,7 +254,7 @@ class NDTTests(unittest.TestCase):
         self.assertAlmostEqual(result, 33.7, places=1)
 
     def test_urban_heat_offset_added(self):
-        from ndt_calculator import NDTCalculator
+        from prana.ndt_calculator import NDTCalculator
         base = NDTCalculator(urban_heat_offset=0).calculate_ndt(
             {'temp': 33, 'humidity': 70, 'wind_speed': 0.5}
         )
@@ -280,7 +280,7 @@ class NDTTests(unittest.TestCase):
 
 class StructuredResponseTests(unittest.TestCase):
     def test_recovery_component_has_description_field(self):
-        from prana_system import PRANASystem
+        from prana.prana_system import PRANASystem
         system = PRANASystem(location_name="Test City")
         now = datetime.now()
         result = {

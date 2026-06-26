@@ -10,13 +10,13 @@ This integrates:
 """
 
 from datetime import datetime, timedelta
-from data_fetcher import DataFetcher
-from ndt_calculator import NDTCalculator
-from ha_aqi_calculator import HAAQICalculator
-from rds_calculator import RDSCalculator
-from ccri_calculator import CCRICalculator
-from config import *
-from uhi_lookup import lookup_uhi_offset
+from prana.data_fetcher import DataFetcher
+from prana.ndt_calculator import NDTCalculator
+from prana.ha_aqi_calculator import HAAQICalculator
+from prana.rds_calculator import RDSCalculator
+from prana.ccri_calculator import CCRICalculator
+from prana.config import *
+from prana.uhi_lookup import lookup_uhi_offset
 from backend.logger import get_logger
 
 logger = get_logger("prana_system")
@@ -375,7 +375,7 @@ def demo_prana_system():
     logger.info("=" * 60)
 
     try:
-        from location_detector import get_current_location, get_location_name
+        from prana.location_detector import get_current_location, get_location_name
         location = get_current_location()
         lat, lon = location['lat'], location['lon']
         location_name = get_location_name(location)

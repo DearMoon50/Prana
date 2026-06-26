@@ -1,7 +1,7 @@
 """Test Issue 5 fix: CCRI pollution unavailable handling"""
 
 import unittest
-from ccri_calculator import CCRICalculator
+from prana.ccri_calculator import CCRICalculator
 
 
 class TestIssue5PollutionUnavailable(unittest.TestCase):

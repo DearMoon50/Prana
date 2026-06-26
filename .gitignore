@@ -21,6 +21,7 @@ htmlcov/
 .venv/
 venv/
 env/
+*.egg-info/
 
 # Local runtime logs and databases
 *.log

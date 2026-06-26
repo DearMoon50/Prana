@@ -1,6 +1,6 @@
 """Calculate PRANA heat-pollution risk."""
 
-from config import *
+from prana.config import *
 
 
 class HAAQICalculator:

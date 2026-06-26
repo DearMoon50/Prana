@@ -14,11 +14,7 @@ Usage:
   python scripts/ccri_rds_sensitivity.py
 """
 
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
-from ccri_calculator import CCRICalculator
+from prana.ccri_calculator import CCRICalculator
 
 CALC = CCRICalculator()
 

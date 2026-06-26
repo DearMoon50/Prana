@@ -5,7 +5,7 @@ import numpy as np
 from datetime import datetime, timedelta
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from config import *
+from prana.config import *
 from backend.logger import get_logger
 
 logger = get_logger("data_fetcher")

@@ -1,7 +1,7 @@
 """Test Issue 4 fix: Ozone heat factor threshold"""
 
 import unittest
-from ha_aqi_calculator import HAAQICalculator
+from prana.ha_aqi_calculator import HAAQICalculator
 
 
 class TestIssue4OzoneHeatThreshold(unittest.TestCase):
