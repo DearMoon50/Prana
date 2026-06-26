@@ -1,4 +1,3 @@
-from datetime import timedelta
 import pandas as pd
 
 def to_logger_nights(df: pd.DataFrame, ts_col: str = "timestamp",
