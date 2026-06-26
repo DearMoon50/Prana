@@ -1,6 +1,6 @@
 """Calculate Recovery Debt Score (RDS) based on nighttime temperatures"""
 from datetime import datetime
-from config import *
+from prana.config import *
 from backend.logger import get_logger
 
 _log = get_logger("rds")

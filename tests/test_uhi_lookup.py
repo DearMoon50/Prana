@@ -1,5 +1,5 @@
 import unittest
-from uhi_lookup import lookup_uhi_offset
+from prana.uhi_lookup import lookup_uhi_offset
 
 
 class UHILookupTests(unittest.TestCase):

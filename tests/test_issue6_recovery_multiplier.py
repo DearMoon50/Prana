@@ -1,7 +1,7 @@
 """Test Issue 6 fix: CCRI recovery multiplier piecewise scaling"""
 
 import unittest
-from ccri_calculator import CCRICalculator
+from prana.ccri_calculator import CCRICalculator
 
 
 class TestIssue6RecoveryMultiplierScaling(unittest.TestCase):

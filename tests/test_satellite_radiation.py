@@ -2,7 +2,7 @@
 
 import unittest
 from unittest.mock import patch, MagicMock
-from data_fetcher import DataFetcher
+from prana.data_fetcher import DataFetcher
 
 
 class TestSatelliteRadiation(unittest.TestCase):
@@ -10,7 +10,7 @@ class TestSatelliteRadiation(unittest.TestCase):
         self.fetcher = DataFetcher(api_key=None)
         self.lat, self.lon = 13.0827, 80.2707  # Chennai
     
-    @patch('data_fetcher.DataFetcher._get_satellite_radiation')
+    @patch('prana.data_fetcher.DataFetcher._get_satellite_radiation')
     def test_fallback_to_model_when_satellite_fails(self, mock_satellite):
         """Weather fetch must work even if satellite radiation call fails"""
         # Satellite returns None (failed or unavailable)
@@ -43,7 +43,7 @@ class TestSatelliteRadiation(unittest.TestCase):
         self.assertEqual(weather['shortwave_radiation'], 650.0,
                         "Must use model-derived radiation when satellite unavailable")
     
-    @patch('data_fetcher.DataFetcher._get_satellite_radiation')
+    @patch('prana.data_fetcher.DataFetcher._get_satellite_radiation')
     def test_satellite_radiation_used_when_available(self, mock_satellite):
         """Satellite radiation should be used when available, not model value"""
         # Satellite returns value
@@ -78,7 +78,7 @@ class TestSatelliteRadiation(unittest.TestCase):
         self.assertNotEqual(weather['shortwave_radiation'], 650.0,
                            "Must NOT use model radiation when satellite is available")
     
-    @patch('data_fetcher.DataFetcher._get_satellite_radiation')
+    @patch('prana.data_fetcher.DataFetcher._get_satellite_radiation')
     def test_get_current_weather_still_works_without_satellite(self, mock_satellite):
         """Integration test: current weather must work if satellite endpoint fails"""
         # Satellite fails and returns None

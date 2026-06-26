@@ -1,5 +1,5 @@
 """Calculate Compound Climate Risk Index (CCRI)"""
-from config import *
+from prana.config import *
 from backend.logger import get_logger
 
 _log = get_logger("ccri")

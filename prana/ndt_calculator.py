@@ -1,6 +1,6 @@
 """Calculate Neighbourhood Danger Temperature (NDT) using WBGT"""
 import numpy as np
-from config import *
+from prana.config import *
 
 class NDTCalculator:
     def __init__(self, urban_heat_offset=0):

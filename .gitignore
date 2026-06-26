@@ -21,6 +21,7 @@ htmlcov/
 .venv/
 venv/
 env/
+*.egg-info/
 
 # Local runtime logs and databases
 *.log
@@ -48,3 +49,7 @@ mobile_app/android/app/release/
 *.iml
 .DS_Store
 Thumbs.db
+.superpowers/
+
+# Research outputs
+research/indoor_heat/**/outputs/

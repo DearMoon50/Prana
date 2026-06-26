@@ -6,8 +6,6 @@ from collections import defaultdict
 from contextlib import redirect_stdout
 from datetime import datetime
 from io import StringIO
-from pathlib import Path
-import sys
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Request, status
@@ -20,12 +18,8 @@ from backend.logger import get_logger
 
 logger = get_logger("api")
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from config import OPENAQ_API_KEY, OPENWEATHER_API_KEY, UPDATE_INTERVAL  # noqa: E402
-from prana_system import PRANASystem  # noqa: E402
+from prana.config import OPENAQ_API_KEY, OPENWEATHER_API_KEY, UPDATE_INTERVAL  # noqa: E402
+from prana.prana_system import PRANASystem  # noqa: E402
 from backend.database import load_nighttime_temps, save_nighttime_temps  # noqa: E402
 
 
