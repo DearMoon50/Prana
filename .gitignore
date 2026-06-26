@@ -48,3 +48,4 @@ mobile_app/android/app/release/
 *.iml
 .DS_Store
 Thumbs.db
+.superpowers/
