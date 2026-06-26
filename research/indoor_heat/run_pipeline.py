@@ -1,5 +1,6 @@
-from __future__ import annotations
 """Wire adapter + core steps into per-site and merged datasets."""
+from __future__ import annotations
+
 from pathlib import Path
 import pandas as pd
 
