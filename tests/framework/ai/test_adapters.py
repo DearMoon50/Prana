@@ -4,6 +4,7 @@ import respx
 from framework.ai.base import Message, Role
 from framework.ai.openrouter import OpenRouterProvider
 from framework.ai.ollama import OllamaProvider
+from framework.ai.gemini import GeminiProvider
 from framework.errors import ProviderError
 
 
@@ -56,3 +57,50 @@ def test_ollama_parses_content():
     )
     r = OllamaProvider(model="llama3").chat([Message(Role.USER, "hi")])
     assert r.content == "local reply" and r.tool_calls == []
+
+
+@respx.mock
+def test_gemini_parses_text_and_function_call():
+    respx.post(
+        url__startswith="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+    ).mock(
+        return_value=httpx.Response(200, json={
+            "candidates": [{"content": {"parts": [
+                {"text": "hello"},
+                {"functionCall": {"name": "get_risk", "args": {"x": 1}}},
+            ]}}],
+        })
+    )
+    r = GeminiProvider(api_key="k", model="gemini-2.0-flash").chat([Message(Role.USER, "hi")])
+    assert r.content == "hello"
+    assert r.tool_calls[0].name == "get_risk" and r.tool_calls[0].arguments == {"x": 1}
+
+
+@respx.mock
+def test_gemini_http_error_raises_provider_error():
+    respx.post(
+        url__startswith="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+    ).mock(return_value=httpx.Response(500, json={"error": "boom"}))
+    with pytest.raises(ProviderError):
+        GeminiProvider(api_key="k", model="gemini-2.0-flash").chat([Message(Role.USER, "hi")])
+
+
+def test_gemini_missing_key_raises():
+    with pytest.raises(ProviderError):
+        GeminiProvider(api_key="", model="gemini-2.0-flash").chat([Message(Role.USER, "hi")])
+
+
+@respx.mock
+def test_gemini_function_call_only_content_is_none():
+    respx.post(
+        url__startswith="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+    ).mock(
+        return_value=httpx.Response(200, json={
+            "candidates": [{"content": {"parts": [
+                {"functionCall": {"name": "get_risk", "args": {"x": 1}}},
+            ]}}],
+        })
+    )
+    r = GeminiProvider(api_key="k", model="gemini-2.0-flash").chat([Message(Role.USER, "hi")])
+    assert r.content is None
+    assert r.tool_calls[0].name == "get_risk" and r.tool_calls[0].arguments == {"x": 1}
