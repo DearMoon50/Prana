@@ -65,6 +65,10 @@ async def receive(request: Request) -> Response:
         await messaging.send(channel="whatsapp", recipient=phone, body=_ONBOARD)
         return Response(status_code=200)
 
+    # Default True: every real (SQLite-backed) user always has an explicit
+    # verified bool via SQLiteUserRepository._to_user, so this default only
+    # matters for hand-built/in-memory UserContext objects, where "no
+    # opinion expressed" should mean "let through," not "block."
     if not user.metadata.get("verified", True):
         user.metadata["verified"] = True
         await user_repo.upsert(user)
