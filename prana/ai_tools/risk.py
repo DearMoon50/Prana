@@ -12,6 +12,8 @@ def get_risk(*, ctx: UserContext) -> dict:
     system = PRANASystem(
         api_key=OPENWEATHER_API_KEY,
         location_name=meta.get("location_name", "Current location"),
+        # None is intentional: lets PRANASystem look up the real per-location
+        # UHI offset via lookup_uhi_offset instead of using a hardcoded default.
         urban_heat_offset=meta.get("urban_heat_offset"),
         openaq_api_key=OPENAQ_API_KEY,
         onboarding_data=meta.get("onboarding"),

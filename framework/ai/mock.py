@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from framework.ai.base import ChatResponse, Message, ToolSchema, Usage
+from framework.ai.base import ChatResponse, Message, ToolSchema
 from framework.errors import ProviderError
 
 

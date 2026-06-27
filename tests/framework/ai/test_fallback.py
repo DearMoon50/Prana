@@ -1,5 +1,5 @@
 import pytest
-from framework.ai.base import ChatResponse, Message, Role, Usage
+from framework.ai.base import ChatResponse, Message, Role
 from framework.ai.mock import MockProvider
 from framework.ai.fallback import FallbackProvider
 from framework.errors import ProviderError
