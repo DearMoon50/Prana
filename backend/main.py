@@ -22,7 +22,7 @@ from prana.config import OPENAQ_API_KEY, OPENWEATHER_API_KEY, UPDATE_INTERVAL  #
 from prana.config import RDS_NIGHTTIME_THRESHOLD  # noqa: E402
 from prana.prana_system import PRANASystem  # noqa: E402
 from backend.database import load_nighttime_temps, save_nighttime_temps  # noqa: E402
-from prana.bot.bootstrap import build_repo, build_checkin_repo  # noqa: E402
+from prana.bot.bootstrap import build_repo, build_checkin_repo, settings  # noqa: E402
 from prana.personalization import personalize_offset  # noqa: E402
 from framework.context.user import UserContext  # noqa: E402
 from prana.config import WHATSAPP_BOT_NUMBER  # noqa: E402
@@ -149,6 +149,7 @@ class RegisterResponse(BaseModel):
     user_id: str
     verified: bool
     whatsapp_link: str
+    sandbox_join_code: str
 
 
 @app.get("/health")
@@ -234,7 +235,8 @@ async def register(payload: RegisterRequest) -> RegisterResponse:
 
     link = f"https://wa.me/{WHATSAPP_BOT_NUMBER}?text=PRANA%20START"
     return RegisterResponse(
-        ok=True, user_id=user.user_id, verified=was_verified, whatsapp_link=link
+        ok=True, user_id=user.user_id, verified=was_verified, whatsapp_link=link,
+        sandbox_join_code=settings.whatsapp_sandbox_join_code,
     )
 
 

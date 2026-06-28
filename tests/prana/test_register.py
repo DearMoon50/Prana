@@ -58,6 +58,22 @@ def test_register_invalid_phone_too_short_returns_422():
     assert resp.status_code == 422
 
 
+def test_register_response_includes_sandbox_join_code(monkeypatch):
+    import backend.main as main
+    monkeypatch.setattr(main.settings, "whatsapp_sandbox_join_code", "able-tiger")
+    client = TestClient(app)
+    response = client.post("/register", json={
+        "phone": "+919900001234",
+        "location_name": "Chennai",
+        "lat": 13.08,
+        "lon": 80.27,
+        "urban_heat_offset": None,
+        "onboarding": {"ac": False, "roof_material": "concrete", "floor_level": "ground"},
+    })
+    assert response.status_code == 200
+    assert response.json()["sandbox_join_code"] == "able-tiger"
+
+
 def test_register_twice_preserves_verified_true():
     import asyncio
     client = TestClient(app)
