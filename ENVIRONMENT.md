@@ -21,13 +21,17 @@ OPENAQ_API_KEY=
 
 ## WhatsApp
 
-These are placeholders for the WhatsApp Business Cloud API or a compatible provider.
+These are placeholders for the Twilio WhatsApp sandbox. `WHATSAPP_FROM_NUMBER` includes
+the `whatsapp:` prefix (Twilio's sandbox number); `WHATSAPP_BOT_NUMBER` is the same number
+written as bare E.164, used only for the wa.me deep link shown to users (no prefix).
 
 ```text
-WHATSAPP_ACCESS_TOKEN=
-WHATSAPP_PHONE_NUMBER_ID=
-WHATSAPP_VERIFY_TOKEN=
-WHATSAPP_APP_SECRET=
+WHATSAPP_ACCOUNT_SID=
+WHATSAPP_AUTH_TOKEN=
+WHATSAPP_FROM_NUMBER=whatsapp:+14155238886
+WHATSAPP_BOT_NUMBER=
+WHATSAPP_SANDBOX_JOIN_CODE=
+WHATSAPP_WEBHOOK_BASE_URL=
 ```
 
 ## LLM

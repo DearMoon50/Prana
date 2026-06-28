@@ -1,6 +1,8 @@
 """Twilio WhatsApp webhook: message -> agent -> reply."""
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Request, Response
 from twilio.request_validator import RequestValidator
 
@@ -10,6 +12,7 @@ from prana.bot.bootstrap import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Module-level singletons (tests monkeypatch these)
 registry = build_registry()
@@ -26,8 +29,15 @@ _ACTIVATED = "You're all set! PRANA will alert you when conditions turn risky."
 
 def _valid_signature(form: dict, header: str | None) -> bool:
     if not header:
+        logger.warning("WhatsApp webhook rejected: missing X-Twilio-Signature header")
         return False
-    return validator.validate(WEBHOOK_URL, form, header)
+    if not validator.validate(WEBHOOK_URL, form, header):
+        logger.warning(
+            "WhatsApp webhook signature validation failed (check WHATSAPP_WEBHOOK_BASE_URL=%r "
+            "matches the public URL Twilio is actually calling)", WEBHOOK_URL,
+        )
+        return False
+    return True
 
 
 def _parse(form: dict):

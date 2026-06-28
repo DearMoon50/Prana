@@ -148,11 +148,13 @@ Important placeholders are listed in `.env.example`:
 - optional weather/air-quality keys:
   - `OPENWEATHER_API_KEY`
   - `OPENAQ_API_KEY`
-- WhatsApp:
-  - `WHATSAPP_ACCESS_TOKEN`
-  - `WHATSAPP_PHONE_NUMBER_ID`
-  - `WHATSAPP_VERIFY_TOKEN`
-  - `WHATSAPP_APP_SECRET`
+- WhatsApp (Twilio sandbox):
+  - `WHATSAPP_ACCOUNT_SID`
+  - `WHATSAPP_AUTH_TOKEN`
+  - `WHATSAPP_FROM_NUMBER`
+  - `WHATSAPP_BOT_NUMBER`
+  - `WHATSAPP_SANDBOX_JOIN_CODE`
+  - `WHATSAPP_WEBHOOK_BASE_URL`
 - LLM:
   - `LLM_PROVIDER`
   - `OPENROUTER_API_KEY`
