@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 import respx
@@ -57,6 +59,26 @@ def test_ollama_parses_content():
     )
     r = OllamaProvider(model="llama3").chat([Message(Role.USER, "hi")])
     assert r.content == "local reply" and r.tool_calls == []
+
+
+@respx.mock
+def test_ollama_synthesizes_react_json_from_native_tool_call():
+    # Some Ollama models (e.g. gpt-oss) ignore the ReAct prompt's
+    # text-JSON instruction and use Ollama's native tool_calls field
+    # instead, leaving "content" empty. OllamaProvider must synthesize
+    # an equivalent ReAct-JSON string into content so the agent's
+    # existing parse_react_response() path still picks up the call.
+    respx.post("http://127.0.0.1:11434/api/chat").mock(
+        return_value=httpx.Response(200, json={"message": {
+            "content": "",
+            "tool_calls": [
+                {"id": "call_1", "function": {"name": "get_risk", "arguments": {}}}
+            ],
+        }})
+    )
+    r = OllamaProvider(model="gpt-oss:20b-cloud").chat([Message(Role.USER, "hi")])
+    assert json.loads(r.content) == {"tool": "get_risk", "args": {}}
+    assert r.tool_calls == []
 
 
 @respx.mock

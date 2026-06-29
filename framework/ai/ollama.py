@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import httpx
 
 from framework.ai.base import ChatResponse, Message, ToolSchema, Usage
@@ -32,4 +34,15 @@ class OllamaProvider:
         except httpx.HTTPError as exc:
             raise ProviderError(f"Ollama request failed: {exc}") from exc
         data = resp.json()
-        return ChatResponse(content=data["message"]["content"], usage=Usage(), raw=data)
+        msg = data["message"]
+        native_calls = msg.get("tool_calls") or []
+        if native_calls:
+            # Some Ollama models use native tool_calls instead of following
+            # the ReAct prompt's text-JSON instruction, leaving content empty.
+            # Synthesize the equivalent ReAct-JSON string so the agent's
+            # existing parse_react_response() path still picks up the call.
+            fn = native_calls[0]["function"]
+            content = json.dumps({"tool": fn["name"], "args": fn.get("arguments") or {}})
+        else:
+            content = msg["content"]
+        return ChatResponse(content=content, usage=Usage(), raw=data)
