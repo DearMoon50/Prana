@@ -14,15 +14,17 @@ class FallbackProvider:
 
     @property
     def supports_native_tools(self) -> bool:
-        return self.providers[0].supports_native_tools
+        # Informational only — the Agent no longer steers on this. True only
+        # when every provider in the chain uses native tools.
+        return all(p.supports_native_tools for p in self.providers)
 
     def chat(self, messages: list[Message], *, tools: list[ToolSchema] | None = None,
              temperature: float = 0.2) -> ChatResponse:
         errors = []
         for provider in self.providers:
             try:
-                use_tools = tools if provider.supports_native_tools else None
-                return provider.chat(messages, tools=use_tools, temperature=temperature)
+                # Each provider adapts `tools` to its own tool-calling style.
+                return provider.chat(messages, tools=tools, temperature=temperature)
             except Exception as exc:  # noqa: BLE001 - try next provider
                 errors.append(f"{provider.name}: {exc}")
         raise ProviderError("All providers failed: " + "; ".join(errors))

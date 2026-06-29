@@ -52,6 +52,13 @@ def test_openrouter_missing_key_raises():
         OpenRouterProvider(api_key="", model="m").chat([Message(Role.USER, "hi")])
 
 
+_GET_RISK_SCHEMA = {
+    "type": "function",
+    "function": {"name": "get_risk", "description": "Get risk",
+                 "parameters": {"type": "object", "properties": {}}},
+}
+
+
 @respx.mock
 def test_ollama_parses_content():
     respx.post("http://127.0.0.1:11434/api/chat").mock(
@@ -62,12 +69,25 @@ def test_ollama_parses_content():
 
 
 @respx.mock
-def test_ollama_synthesizes_react_json_from_native_tool_call():
-    # Some Ollama models (e.g. gpt-oss) ignore the ReAct prompt's
-    # text-JSON instruction and use Ollama's native tool_calls field
-    # instead, leaving "content" empty. OllamaProvider must synthesize
-    # an equivalent ReAct-JSON string into content so the agent's
-    # existing parse_react_response() path still picks up the call.
+def test_ollama_react_text_tool_call_populates_tool_calls():
+    # With tools passed, OllamaProvider builds the ReAct prompt internally
+    # and parses a text-JSON tool call into ChatResponse.tool_calls.
+    respx.post("http://127.0.0.1:11434/api/chat").mock(
+        return_value=httpx.Response(200, json={"message": {
+            "content": '```json\n{"tool": "get_risk", "args": {}}\n```'
+        }})
+    )
+    r = OllamaProvider(model="phi4-mini").chat(
+        [Message(Role.USER, "what is my risk")], tools=[_GET_RISK_SCHEMA])
+    assert r.content is None
+    assert r.tool_calls[0].name == "get_risk" and r.tool_calls[0].arguments == {}
+
+
+@respx.mock
+def test_ollama_native_tool_call_populates_tool_calls():
+    # Some models (e.g. gpt-oss) use Ollama's native tool_calls field
+    # instead of the ReAct text instruction. OllamaProvider must surface
+    # these as ChatResponse.tool_calls too.
     respx.post("http://127.0.0.1:11434/api/chat").mock(
         return_value=httpx.Response(200, json={"message": {
             "content": "",
@@ -76,9 +96,21 @@ def test_ollama_synthesizes_react_json_from_native_tool_call():
             ],
         }})
     )
-    r = OllamaProvider(model="gpt-oss:20b-cloud").chat([Message(Role.USER, "hi")])
-    assert json.loads(r.content) == {"tool": "get_risk", "args": {}}
-    assert r.tool_calls == []
+    r = OllamaProvider(model="gpt-oss:20b-cloud").chat(
+        [Message(Role.USER, "hi")], tools=[_GET_RISK_SCHEMA])
+    assert r.tool_calls[0].name == "get_risk" and r.tool_calls[0].arguments == {}
+
+
+@respx.mock
+def test_ollama_react_plain_answer_sets_content():
+    respx.post("http://127.0.0.1:11434/api/chat").mock(
+        return_value=httpx.Response(200, json={"message": {
+            "content": '{"answer": "you are safe"}'
+        }})
+    )
+    r = OllamaProvider(model="phi4-mini").chat(
+        [Message(Role.USER, "am i safe")], tools=[_GET_RISK_SCHEMA])
+    assert r.content == "you are safe" and r.tool_calls == []
 
 
 @respx.mock

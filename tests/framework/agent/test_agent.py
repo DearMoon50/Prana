@@ -3,6 +3,7 @@ from framework.agent.base import Agent
 from framework.agent.result import AgentResult
 from framework.ai.base import ChatResponse, ToolCall, Usage, Role, Message
 from framework.ai.mock import MockProvider
+from framework.errors import ProviderError
 from framework.tools.base import Tool, ToolRegistry
 from framework.context.user import UserContext
 
@@ -35,16 +36,37 @@ def test_direct_answer_no_tool():
     assert res.answer == "Hello!" and res.trace == []
 
 
-def test_react_fallback_path():
+def test_agent_always_passes_tools_to_provider():
+    # The Agent no longer branches on supports_native_tools; it always
+    # passes the tool schemas and reads ChatResponse.tool_calls uniformly.
     provider = MockProvider(responses=[
-        ChatResponse(content='{"tool":"get_risk","args":{}}', usage=Usage()),
-        ChatResponse(content='{"answer":"Risk HIGH"}', usage=Usage()),
+        ChatResponse(content=None, tool_calls=[ToolCall("1", "get_risk", {})], usage=Usage()),
+        ChatResponse(content="Risk HIGH", usage=Usage()),
     ], supports_native_tools=False)
     res = _run(Agent(provider, _registry()), "risk?")
     assert res.answer == "Risk HIGH"
     assert res.trace[0].tool == "get_risk"
-    # fallback path must NOT pass native tools to provider
-    assert provider.calls[0]["tools"] is None
+    # tools are always passed now, regardless of supports_native_tools
+    assert provider.calls[0]["tools"] is not None
+
+
+def test_agent_over_mixed_fallback_chain_reaches_react_provider():
+    # Regression test for the supports_native_tools bug: a FallbackProvider
+    # whose FIRST provider is native-but-failing must still let the Agent
+    # drive a downstream ReAct provider correctly. The Agent passes tools to
+    # the chain; the chain forwards them to whichever provider answers; the
+    # OllamaProvider-style mock returns tool_calls then a grounded answer.
+    from framework.ai.fallback import FallbackProvider
+    native_down = MockProvider(error=ProviderError("no api key"),
+                               supports_native_tools=True)
+    react_provider = MockProvider(responses=[
+        ChatResponse(content=None, tool_calls=[ToolCall("1", "get_risk", {})], usage=Usage()),
+        ChatResponse(content="Your risk is HIGH (72).", usage=Usage()),
+    ], supports_native_tools=False)
+    chain = FallbackProvider([native_down, react_provider])
+    res = _run(Agent(chain, _registry()), "what is my risk now")
+    assert res.answer == "Your risk is HIGH (72)."
+    assert res.trace[0].tool == "get_risk" and res.trace[0].ok
 
 
 def test_max_steps_guard():

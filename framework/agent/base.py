@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from typing import Callable
 
-from framework.agent.react import build_react_messages, parse_react_response
 from framework.agent.result import AgentResult, TraceEntry
 from framework.ai.base import LLMProvider, Message, Role, Usage
 from framework.context.user import UserContext
@@ -54,16 +53,14 @@ class Agent:
         trace: list[TraceEntry] = []
 
         for step in range(1, self.max_steps + 1):
-            if self.provider.supports_native_tools:
-                resp = self.provider.chat(
-                    messages, tools=self.registry.schemas(), temperature=self.temperature
-                )
-                tool_calls = resp.tool_calls
-                answer = resp.content
-            else:
-                react_msgs = build_react_messages(messages, self.registry.schemas())
-                resp = self.provider.chat(react_msgs, tools=None, temperature=self.temperature)
-                tool_calls, answer = parse_react_response(resp.content or "")
+            # Always offer tools; each provider adapts to its own tool-calling
+            # style (native API or ReAct text) and returns a normalized
+            # ChatResponse with tool_calls populated when a call is requested.
+            resp = self.provider.chat(
+                messages, tools=self.registry.schemas(), temperature=self.temperature
+            )
+            tool_calls = resp.tool_calls
+            answer = resp.content
 
             total = resp.usage if total is None else total + resp.usage
 

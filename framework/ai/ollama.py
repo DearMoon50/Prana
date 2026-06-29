@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import json
+import uuid
 
 import httpx
 
-from framework.ai.base import ChatResponse, Message, ToolSchema, Usage
+from framework.agent.react import build_react_messages, parse_react_response
+from framework.ai.base import ChatResponse, Message, ToolCall, ToolSchema, Usage
 from framework.errors import ProviderError
 
 
@@ -22,9 +23,14 @@ class OllamaProvider:
              temperature: float = 0.2) -> ChatResponse:
         if not self.model:
             raise ProviderError("OLLAMA_MODEL is not configured")
+        # Ollama has no native function-calling contract we rely on, so when
+        # tools are offered we drive tool use with a ReAct text prompt and
+        # parse the model's reply ourselves. Re-applied each call so multi-step
+        # follow-ups carrying prior tool results get re-framed.
+        send = build_react_messages(messages, tools) if tools else messages
         payload = {
             "model": self.model,
-            "messages": [{"role": m.role.value, "content": m.content} for m in messages],
+            "messages": [{"role": m.role.value, "content": m.content} for m in send],
             "options": {"temperature": temperature},
             "stream": False,
         }
@@ -35,14 +41,20 @@ class OllamaProvider:
             raise ProviderError(f"Ollama request failed: {exc}") from exc
         data = resp.json()
         msg = data["message"]
+        if not tools:
+            return ChatResponse(content=msg.get("content"), usage=Usage(), raw=data)
+
+        # Some models (e.g. gpt-oss) emit Ollama's native tool_calls field
+        # instead of following the ReAct text instruction; honor both.
         native_calls = msg.get("tool_calls") or []
         if native_calls:
-            # Some Ollama models use native tool_calls instead of following
-            # the ReAct prompt's text-JSON instruction, leaving content empty.
-            # Synthesize the equivalent ReAct-JSON string so the agent's
-            # existing parse_react_response() path still picks up the call.
-            fn = native_calls[0]["function"]
-            content = json.dumps({"tool": fn["name"], "args": fn.get("arguments") or {}})
-        else:
-            content = msg["content"]
-        return ChatResponse(content=content, usage=Usage(), raw=data)
+            calls = [
+                ToolCall(id=tc.get("id") or str(uuid.uuid4()),
+                         name=tc["function"]["name"],
+                         arguments=tc["function"].get("arguments") or {})
+                for tc in native_calls
+            ]
+            return ChatResponse(content=None, tool_calls=calls, usage=Usage(), raw=data)
+
+        tool_calls, answer = parse_react_response(msg.get("content") or "")
+        return ChatResponse(content=answer, tool_calls=tool_calls, usage=Usage(), raw=data)
