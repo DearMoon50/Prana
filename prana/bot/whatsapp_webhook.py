@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Request, Response
 from twilio.request_validator import RequestValidator
 
 from framework import agent as make_agent
@@ -48,8 +48,26 @@ def _parse(form: dict):
     return phone.removeprefix("whatsapp:"), body
 
 
+async def _run_agent_and_reply(phone: str, text: str) -> None:
+    """Run the agent and send its reply. Scheduled as a background task so the
+    webhook can ACK Twilio within its 15s timeout regardless of how long the
+    agent (live data fetch + LLM calls) takes."""
+    user = await user_repo.get_by_phone(phone)
+    if user is None:  # deleted between ACK and task run; nothing to reply to
+        return
+    ag = make_agent(provider, registry, max_steps=settings.agent_max_steps,
+                    temperature=settings.agent_temperature)
+    try:
+        result = await ag.run(text, user)
+        body = result.answer or "Sorry, please try again."
+    except Exception:  # noqa: BLE001 - never leave the user without a reply
+        logger.exception("Agent run failed for %s", phone)
+        body = "Sorry, something went wrong. Please try again shortly."
+    await messaging.send(channel="whatsapp", recipient=phone, body=body)
+
+
 @router.post("/webhook/whatsapp")
-async def receive(request: Request) -> Response:
+async def receive(request: Request, background: BackgroundTasks) -> Response:
     form = dict(await request.form())
     if not _valid_signature(form, request.headers.get("X-Twilio-Signature")):
         return Response(status_code=403)
@@ -70,9 +88,7 @@ async def receive(request: Request) -> Response:
         await messaging.send(channel="whatsapp", recipient=phone, body=_ACTIVATED)
         return Response(status_code=200)
 
-    ag = make_agent(provider, registry, max_steps=settings.agent_max_steps,
-                    temperature=settings.agent_temperature)
-    result = await ag.run(text, user)
-    await messaging.send(channel="whatsapp", recipient=phone,
-                          body=result.answer or "Sorry, please try again.")
+    # The agent run can take ~15s (live data + LLM). Run it after responding so
+    # Twilio gets its ACK immediately and never times out the webhook.
+    background.add_task(_run_agent_and_reply, phone, text)
     return Response(status_code=200)

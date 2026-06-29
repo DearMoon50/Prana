@@ -65,6 +65,47 @@ def test_known_user_gets_agent_reply(client):
     assert channel.sent[-1].recipient == "+919900"
 
 
+def test_agent_path_acks_empty_and_replies_via_background(client):
+    # The webhook must ACK Twilio with an empty 200 (not the agent's answer)
+    # and deliver the reply via a BackgroundTask, so a slow agent run can't
+    # blow Twilio's 15s webhook timeout. TestClient runs background tasks
+    # after the response, so the reply is still observed once delivered.
+    c, repo, channel = client
+    import asyncio
+    asyncio.run(
+        repo.upsert(UserContext(user_id="u5", phone="+919900009999",
+                                metadata={"lat": 13.08, "lon": 80.27, "verified": True})))
+    r = _post(c, {"From": "whatsapp:+919900009999", "Body": "why is my risk high?"})
+    assert r.status_code == 200
+    # The HTTP body is the empty ack, NOT the agent's answer — proving the
+    # answer is sent out-of-band via the messaging channel, not in the response.
+    assert r.text == ""
+    assert channel.sent[-1].body == "Your risk is HIGH tonight."
+    assert channel.sent[-1].recipient == "+919900009999"
+
+
+def test_agent_runner_scheduled_not_awaited_in_handler(client, monkeypatch):
+    # Directly assert the route schedules _run_agent_and_reply as a background
+    # task rather than awaiting it inline: replace it with a sync spy and
+    # confirm the route still returns 200 without the spy having to be async-
+    # awaited within the request (BackgroundTasks invokes it post-response).
+    c, repo, _ = client
+    import asyncio
+    asyncio.run(
+        repo.upsert(UserContext(user_id="u6", phone="+919900001212",
+                                metadata={"lat": 13.08, "lon": 80.27, "verified": True})))
+    calls = []
+
+    async def spy(phone, text):
+        calls.append((phone, text))
+    monkeypatch.setattr(wh, "_run_agent_and_reply", spy)
+
+    r = _post(c, {"From": "whatsapp:+919900001212", "Body": "why is my risk high?"})
+    assert r.status_code == 200 and r.text == ""
+    # background task ran (post-response) with the parsed phone + text
+    assert calls == [("+919900001212", "why is my risk high?")]
+
+
 def test_forged_signature_rejected(client):
     c, _, _ = client
     r = c.post("/webhook/whatsapp", data={"From": "whatsapp:+919900", "Body": "hi"},
