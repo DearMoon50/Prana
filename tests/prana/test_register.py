@@ -35,8 +35,10 @@ def test_register_saves_user_with_onboarding_metadata():
     import asyncio
     user = asyncio.run(go())
     assert user is not None
+    # HomeProfile fills defaults for fan/windows_open/occupants on dump.
     assert user.metadata["onboarding"] == {
-        "ac": True, "roof_material": "concrete", "floor_level": "middle"
+        "ac": True, "roof_material": "concrete", "floor_level": "middle",
+        "fan": False, "windows_open": False, "occupants": 1,
     }
     assert user.metadata["lat"] == 13.0827
     assert user.metadata["verified"] is False
