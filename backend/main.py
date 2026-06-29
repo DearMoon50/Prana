@@ -49,6 +49,22 @@ app.add_middleware(
 from prana.bot.whatsapp_webhook import router as whatsapp_router  # noqa: E402
 app.include_router(whatsapp_router)
 
+from prana.scheduler import AlertScheduler  # noqa: E402
+
+_scheduler = AlertScheduler()
+
+
+@app.on_event("startup")
+async def _start_scheduler() -> None:
+    """Start the periodic proactive-alert loop when the API boots."""
+    if os.getenv("DISABLE_ALERT_SCHEDULER") != "1":
+        _scheduler.start()
+
+
+@app.on_event("shutdown")
+async def _stop_scheduler() -> None:
+    await _scheduler.stop()
+
 
 # ---------------------------------------------------------------------------
 # Simple in-memory rate limiter

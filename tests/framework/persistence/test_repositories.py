@@ -33,6 +33,32 @@ def test_get_missing_returns_none(make_repo, tmp_path):
     assert asyncio.run(repo.get_by_phone("+000")) is None
 
 
+@pytest.mark.parametrize("make_repo", [
+    lambda tmp: InMemoryUserRepository(),
+    lambda tmp: SQLiteUserRepository(str(tmp / "t.db")),
+])
+def test_list_all_returns_every_user(make_repo, tmp_path):
+    repo = make_repo(tmp_path)
+    async def go():
+        assert await repo.list_all() == []
+        await repo.upsert(UserContext(user_id="a", phone="+1", metadata={"lat": 1, "lon": 2}))
+        await repo.upsert(UserContext(user_id="b", phone="+2", metadata={"lat": 3, "lon": 4}))
+        users = await repo.list_all()
+        assert {u.user_id for u in users} == {"a", "b"}
+    asyncio.run(go())
+
+
+def test_sqlite_persists_last_alert_level(tmp_path):
+    repo = SQLiteUserRepository(str(tmp_path / "t.db"))
+    async def go():
+        u = _user()
+        u.metadata["last_alert_level"] = "HIGH"
+        await repo.upsert(u)
+        reloaded = await repo.get("u1")
+        assert reloaded.metadata.get("last_alert_level") == "HIGH"
+    asyncio.run(go())
+
+
 def test_sqlite_upsert_is_idempotent(tmp_path):
     repo = SQLiteUserRepository(str(tmp_path / "t.db"))
     async def go():

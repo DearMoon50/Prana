@@ -42,10 +42,14 @@ class SQLiteUserRepository:
         self.db_path = db_path.replace("sqlite:///", "").replace("sqlite://", "")
         with self._conn() as c:
             c.execute(_SCHEMA)
-            try:
-                c.execute("ALTER TABLE users ADD COLUMN verified INTEGER DEFAULT 0")
-            except sqlite3.OperationalError:
-                pass  # column already exists (fresh DB created with the schema above)
+            for ddl in (
+                "ALTER TABLE users ADD COLUMN verified INTEGER DEFAULT 0",
+                "ALTER TABLE users ADD COLUMN last_alert_level TEXT",
+            ):
+                try:
+                    c.execute(ddl)
+                except sqlite3.OperationalError:
+                    pass  # column already exists (fresh DB or prior migration)
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -66,6 +70,9 @@ class SQLiteUserRepository:
                 "urban_heat_offset": row["urban_heat_offset"],
                 "onboarding": json.loads(row["onboarding_json"]) if row["onboarding_json"] else None,
                 "verified": bool(row["verified"]) if row["verified"] is not None else False,
+                "last_alert_level": (
+                    row["last_alert_level"] if "last_alert_level" in row.keys() else None
+                ),
             },
         )
 
@@ -89,21 +96,30 @@ class SQLiteUserRepository:
             c.execute(
                 """INSERT INTO users
                    (user_id, phone, location_name, lat, lon, urban_heat_offset,
-                    onboarding_json, role, locale, created_at, verified)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                    onboarding_json, role, locale, created_at, verified, last_alert_level)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(user_id) DO UPDATE SET
                      phone=excluded.phone, location_name=excluded.location_name,
                      lat=excluded.lat, lon=excluded.lon,
                      urban_heat_offset=excluded.urban_heat_offset,
                      onboarding_json=excluded.onboarding_json,
                      role=excluded.role, locale=excluded.locale,
-                     verified=excluded.verified""",
+                     verified=excluded.verified,
+                     last_alert_level=excluded.last_alert_level""",
                 (user.user_id, user.phone, m.get("location_name"), m.get("lat"), m.get("lon"),
                  m.get("urban_heat_offset"),
                  json.dumps(m.get("onboarding")) if m.get("onboarding") is not None else None,
                  user.role, user.locale, datetime.now(timezone.utc).isoformat(),
-                 1 if m.get("verified") else 0),
+                 1 if m.get("verified") else 0, m.get("last_alert_level")),
             )
+
+    async def list_all(self) -> list[UserContext]:
+        return await asyncio.to_thread(self._list_all)
+
+    def _list_all(self) -> list[UserContext]:
+        with self._conn() as c:
+            rows = c.execute("SELECT * FROM users").fetchall()
+        return [self._to_user(r) for r in rows]
 
 
 class SQLiteCheckinRepository:

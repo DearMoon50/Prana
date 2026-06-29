@@ -15,3 +15,6 @@ class InMemoryUserRepository:
 
     async def upsert(self, user: UserContext) -> None:
         self._by_id[user.user_id] = user
+
+    async def list_all(self) -> list[UserContext]:
+        return list(self._by_id.values())
