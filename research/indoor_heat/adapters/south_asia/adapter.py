@@ -83,7 +83,11 @@ class SouthAsiaAdapter:
         return dict(_ROOF_CANON)
 
     def floor_map(self, site: str) -> dict:
-        # canonical floor_level: 'top' if the raw value indicates top floor, else 'other'
+        # canonical floor_level: 'top' if the raw value indicates top floor, else 'other'.
+        # For urban sites (Delhi, Dhaka, Faisalabad), the column is "Floor on top"
+        # or "Floor above", so "no" means it IS the top floor.
+        if site in ["delhi", "dhaka", "faisalabad"]:
+            return {"no": "top", "0": "top", "false": "top"}
         return {v: "top" for v in _FLOOR_CANON_TRUE}
 
     def column_map(self, site: str) -> dict:

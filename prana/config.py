@@ -45,8 +45,18 @@ OZONE_HEAT_COUPLING_THRESHOLD_AQI = 50  # Only apply heat factor when O3 AQI >= 
 
 # Recovery Debt Score
 RDS_NIGHTTIME_THRESHOLD = 32.0  # Celsius - no recovery above this (dry-bulb scale)
-RDS_DECAY_FACTOR = 0.8  # Exponential decay for past nights
-RDS_MAX_DAYS = 7  # Track last 7 nights
+RDS_DECAY_FACTOR = 0.8  # Half-life ~3.1 nights, ~41% of a night's debt remains
+                        # after 4 nights. Direction (slow multi-night recovery,
+                        # not a single-night reset) is consistent with chronic
+                        # sleep-restriction recovery studies -- e.g. 5 nights of
+                        # restriction requiring ~7 nights to return to baseline,
+                        # deficits still measurable after multiple recovery
+                        # nights (see docs/RDS_MODEL.md SS3.3). This is an
+                        # analogy, not a fitted value: those studies measure
+                        # hours-short chronic sleep restriction, not acute
+                        # heat-driven single-night recovery failure.
+RDS_MAX_DAYS = 4  # Track last 4 nights (debt persists across the window rather
+                  # than fully clearing -- see RDS_DECAY_FACTOR above)
 
 # --- Indoor temperature offset model (effective sleeping temp vs outdoor) ---
 # Cooling devices (negative = cooler indoors)
@@ -54,8 +64,46 @@ RDS_ONBOARDING_AC_OFFSET = -3.0  # degC: effective indoor temp reduction from AC
 RDS_ONBOARDING_FAN_OFFSET = -2.0  # degC: equivalent cooling effect of a fan at sleep (~1 m/s airflow, ASHRAE 55 elevated air speed)
 RDS_ONBOARDING_WINDOW_OFFSET = -1.5  # degC: night ventilation / cross-breeze when windows kept open (PROTOTYPE_ASSUMPTION)
 # Building envelope (positive = hotter indoors)
-RDS_ONBOARDING_TIN_ROOF_OFFSET = 2.0  # degC: additional indoor heat from tin roof (PROTOTYPE_ASSUMPTION; effect is nonlinear, overstates at moderate temps)
-RDS_ONBOARDING_TOP_FLOOR_OFFSET = 1.5  # degC: additional indoor heat from top floor unshaded (PROTOTYPE_ASSUMPTION; weak statistical support)
+# Climate-Zone-Aware building envelope offsets (Nature Sci Data 10.1038/s41597-022-01314-5).
+# Segregated to avoid Simpson's Paradox: Dry climates (Delhi) show top-floor cooling, 
+# while Humid climates (Dhaka) show top-floor heat entrapment.
+RDS_CLIMATE_ZONE_COEFFS = {
+    "hot_dry": {  # Derived from Delhi/Faisalabad (Hot, Dry/Semi-Arid)
+        "roof": {
+            "tin":      {"baseline": -3.17, "interaction":  0.136},
+            "concrete": {"baseline":  2.50, "interaction": -0.087},
+            "stone":    {"baseline": -0.35, "interaction":  0.058},
+            "brick":    {"baseline":  0.0,  "interaction":  0.0},
+        },
+        "floor": {
+            "top": -1.02, # degC (Significant radiative sky cooling in dry air)
+            "other": 0.0
+        }
+    },
+    "hot_humid": {  # Derived from Dhaka/Coastal (Hot, Humid/Tropical)
+        "roof": {
+            "tin":      {"baseline": -3.82, "interaction":  0.125},
+            "concrete": {"baseline":  0.0,  "interaction":  0.0},  # Reference in sample
+            "brick":    {"baseline":  0.0,  "interaction":  0.0},
+        },
+        "floor": {
+            "top": 0.92, # degC (Heat trap: lack of radiative sky cooling under moisture)
+            "other": 0.0
+        }
+    },
+    "default": {  # Conservative fallback based on global MixedLM pooled result (n=26,501)
+        "roof": {
+            "tin":      {"baseline":  1.89, "interaction": -0.047},
+            "concrete": {"baseline":  1.37, "interaction": -0.016},
+            "stone":    {"baseline":  0.57, "interaction":  0.043},
+            "brick":    {"baseline":  0.0,  "interaction":  0.0},
+        },
+        "floor": {
+            "top": 0.0, # Defensive floor (do not assume sky cooling if zone unknown)
+            "other": 0.0
+        }
+    }
+}
 # Occupancy (positive = hotter indoors from metabolic heat load)
 RDS_ONBOARDING_PER_EXTRA_OCCUPANT_OFFSET = 0.5  # degC per person beyond the first sharing the sleeping room
 

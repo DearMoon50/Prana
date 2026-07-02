@@ -7,14 +7,48 @@ from backend.logger import get_logger
 _log = get_logger("rds")
 
 
+def _rfu_from_excess(excess):
+    """Map degrees-over-threshold to Recovery Failure Units (0-100+).
+
+    Linear at ~10 RFU/degC for excess in (0, 10] -- this is the entire
+    observed range (RDS demo, sensitivity sweep, and the Karachi 2015 case
+    study never exceed it) and is unchanged from the original model.
+
+    Beyond excess=10 (i.e. >42C effective dry-bulb -- essentially
+    non-physical for indoor air), a hard min(100, ...) cap used to make ANY
+    excess above 10C score identically (a 42C and a 58C night were
+    indistinguishable). Replaced with a logarithmic continuation that is
+    continuous in both VALUE and SLOPE at excess=10 (verified: both sides
+    equal 100 and slope 10 at the junction) -- not a new arbitrary
+    threshold, just the same linear model extended so no two different
+    inputs ever map to the same score. RFU can now exceed 100 for a single
+    extreme night, but the multi-night RDS total is still hard-capped at
+    100 (see calculate_rds/_compute_rds_single_offset), so the system
+    remains bounded -- this only restores distinguishability internally.
+    """
+    if excess <= 0:
+        return 0.0
+    if excess <= 10:
+        return excess * 10.0
+    return 100.0 + 10.0 * math.log(1 + (excess - 10))
+
+
 def _stull_wet_bulb(temp_c, humidity_percent):
     """Wet-bulb temperature via Stull (2011), accurate to ~±1C for typical
     humid-warm conditions. Duplicated here (rather than importing NDTCalculator)
-    to keep RDS self-contained and cheap to call per night."""
+    to keep RDS self-contained and cheap to call per night.
+
+    Returns None for unusable inputs (None/NaN/inf, or negative RH), so callers
+    cleanly fall back to the dry-bulb pathway. Supersaturated RH (>100%) is
+    clamped to 100% rather than allowed to inflate the wet-bulb estimate.
+    """
     if temp_c is None or humidity_percent is None:
         return None
     T = float(temp_c)
     RH = float(humidity_percent)
+    if not (math.isfinite(T) and math.isfinite(RH)) or RH < 0:
+        return None
+    RH = min(RH, 100.0)  # clamp physically-impossible supersaturation
     return (
         T * math.atan(0.151977 * math.sqrt(RH + 8.313659))
         + math.atan(T + RH)
@@ -30,25 +64,15 @@ class RDSCalculator:
         self.onboarding_data = onboarding_data  # Optional dict with ac, roof_material, floor_level, fan, windows_open, occupants
 
     @staticmethod
-    def compute_onboarding_temp_offset(onboarding_data):
+    def compute_onboarding_temp_offset(onboarding_data, outdoor_temp=None, climate_zone="default"):
         """
         Compute effective indoor temperature offset from onboarding categorical inputs.
 
         Offsets are applied to outdoor nighttime temp before the RFU threshold
-        check. All values are PROTOTYPE_ASSUMPTION — not empirically validated
-        for the target population, but each is grounded in a cited mechanism
-        (see config.py).
+        check. Building envelope offsets (roof, floor) are climate-zone sensitive
+        and temperature-dependent (Nature Sci Data 10.1038/s41597-022-01314-5).
 
-        Recognized keys:
-            ac (bool)            -> RDS_ONBOARDING_AC_OFFSET (cooler)
-            fan (bool)           -> RDS_ONBOARDING_FAN_OFFSET (cooler)
-            windows_open (bool)  -> RDS_ONBOARDING_WINDOW_OFFSET (cooler)
-            roof_material (str)  -> 'tin' adds RDS_ONBOARDING_TIN_ROOF_OFFSET (hotter)
-            floor_level (str)    -> 'top' adds RDS_ONBOARDING_TOP_FLOOR_OFFSET (hotter)
-            occupants (int)      -> +offset per person beyond the first (hotter)
-
-        Returns:
-            float: total temperature offset in degC (negative = cooler, positive = hotter).
+        Recognized zones: 'hot_dry', 'hot_humid', 'default'.
         """
         if not onboarding_data:
             return 0.0
@@ -60,21 +84,42 @@ class RDSCalculator:
             offset += RDS_ONBOARDING_FAN_OFFSET
         if onboarding_data.get('windows_open'):
             offset += RDS_ONBOARDING_WINDOW_OFFSET
-        # Building envelope
-        roof = str(onboarding_data.get('roof_material', '')).lower()
-        if roof == 'tin':
-            offset += RDS_ONBOARDING_TIN_ROOF_OFFSET
+
+        # Building envelope (Climate-Zone-Aware)
+        T = float(outdoor_temp if outdoor_temp is not None else 25.0)
+        zone_cfg = RDS_CLIMATE_ZONE_COEFFS.get(climate_zone, RDS_CLIMATE_ZONE_COEFFS["default"])
+        
+        # Roof Material
+        roof = str(onboarding_data.get('roof_material', 'brick')).lower()
+        roof_cfg = zone_cfg["roof"].get(roof, zone_cfg["roof"].get('brick', {"baseline": 0.0, "interaction": 0.0}))
+        offset += roof_cfg['baseline'] + (roof_cfg['interaction'] * T)
+
+        # Floor Level
         floor = str(onboarding_data.get('floor_level', '')).lower()
         if floor == 'top':
-            offset += RDS_ONBOARDING_TOP_FLOOR_OFFSET
-        # Occupancy (metabolic heat load): +offset per person beyond the first
+            f_off = zone_cfg["floor"].get("top", 0.0)
+            
+            # --- DEFENSIVE SAFETY CAP ---
+            # Longwave sky cooling (which causes the negative offset in dry zones)
+            # breaks down under extreme heat masses. We cap cooling at 0.0 above 35C.
+            if T > 35.0 and f_off < 0:
+                f_off = 0.0
+            offset += f_off
+        
+        # --- THERMODYNAMIC SANITY CONSTRAINTS ---
+        # Cap absolute structural cooling at -4.0C. Structural and radiative
+        # parameters (sky cooling) cannot physically zero out an extreme air mass.
+        offset = max(offset, -4.0)
+
+        # Occupancy (metabolic heat load)
         try:
             occupants = int(onboarding_data.get('occupants', 1) or 1)
         except (TypeError, ValueError):
             occupants = 1
         if occupants > 1:
             offset += (occupants - 1) * RDS_ONBOARDING_PER_EXTRA_OCCUPANT_OFFSET
-        return round(offset, 1)
+
+        return round(offset, 2)
 
     @staticmethod
     def compute_band_width(onboarding_data):
@@ -99,7 +144,19 @@ class RDSCalculator:
             humidity: Relative humidity (%) at that nighttime minimum, used for
                       wet-bulb computation. Optional; if absent the night falls
                       back to dry-bulb scoring.
+
+        Invalid temperatures (None/NaN/inf) are rejected and not stored, so a
+        bad forecast point can never crash or silently distort the score.
         """
+        try:
+            night_temp = float(night_temp)
+        except (TypeError, ValueError):
+            _log.warning("Ignoring night temperature that is not a number: %r", night_temp)
+            return
+        if not math.isfinite(night_temp):
+            _log.warning("Ignoring non-finite night temperature: %r", night_temp)
+            return
+
         if date is None:
             date = datetime.now().date()
 
@@ -140,12 +197,20 @@ class RDSCalculator:
           suggests).
 
         Final RFU = max(dry pathway, wet pathway). The two thresholds are
-        chosen so that at moderate humidity (~50-60% RH) the pathways roughly
-        agree, the wet pathway dominates in humid conditions, and the dry
-        pathway dominates in arid conditions.
+        adopted independently (32C dry from the sleep dose-response literature,
+        28C wet-bulb from measured uncompensable-heat limits). By the Stull
+        conversion they cross at ~73% RH: below that the dry pathway binds, and
+        only in genuinely humid air (>~73% RH) does the wet-bulb pathway add
+        risk the dry number underrates. (Earlier docs said ~50-60% RH; that was
+        wrong -- verified crossover is 73%.)
 
-        Slope: every ~1C of excess over a threshold adds ~10 RFU (Obradovich
-        et al. 2017; the /10 divisor remains an un-fitted placeholder).
+        Slope: every ~1C of excess over a threshold adds ~10 RFU up to 10C
+        excess (Obradovich et al. 2017; the /10 divisor remains an un-fitted
+        placeholder). Beyond 10C excess (>42C dry-bulb / >38C wet-bulb --
+        essentially non-physical for indoor air) RFU continues growing on a
+        smooth logarithmic tail rather than flattening, so extreme nights
+        stay distinguishable instead of all reading identically as 100 (see
+        _rfu_from_excess). The multi-night RDS total is still capped at 100.
 
         Args:
             night_temp: Nighttime outdoor (dry-bulb) temperature (C).
@@ -154,13 +219,16 @@ class RDSCalculator:
             humidity: Relative humidity (%) for this night, or None.
 
         Returns:
-            Recovery Failure Units (0-100).
+            Recovery Failure Units (0 up to 10C excess is 0-100; beyond that,
+            unbounded but slow-growing -- see _rfu_from_excess).
         """
         effective_air_temp = night_temp + indoor_offset
+        if not math.isfinite(effective_air_temp):
+            return 0.0  # defensive: a non-finite input contributes no recovery failure
 
         # Dry-bulb pathway (always available)
         dry_excess = effective_air_temp - RDS_NIGHTTIME_THRESHOLD
-        dry_rfu = min(100, (dry_excess / 10) * 100) if dry_excess > 0 else 0.0
+        dry_rfu = _rfu_from_excess(dry_excess)
 
         # Wet-bulb pathway (only when enabled and humidity known)
         wet_rfu = 0.0
@@ -168,12 +236,12 @@ class RDSCalculator:
             effective_wet_bulb = _stull_wet_bulb(effective_air_temp, humidity)
             if effective_wet_bulb is not None:
                 wet_excess = effective_wet_bulb - RDS_NIGHTTIME_WETBULB_THRESHOLD
-                if wet_excess > 0:
-                    wet_rfu = min(100, (wet_excess / 10) * 100)
+                wet_rfu = _rfu_from_excess(wet_excess)
 
         return max(dry_rfu, wet_rfu)
     
-    def calculate_rds(self, debug=False, onboarding_data=None,
+    def calculate_rds(self, debug=False, outdoor_night_temp=None,
+                      onboarding_data=None, climate_zone="default",
                       personalized_offset=None, personalized_band=None):
         """
         Calculate cumulative Recovery Debt Score with uncertainty band
@@ -210,36 +278,44 @@ class RDSCalculator:
                 'personalized': personalized_offset is not None,
             }
 
+        # The per-night offset (temperature- and zone-dependent) is computed
+        # inside _compute_rds_single_offset; here we only resolve the band width
+        # and whether a personalized offset is in play.
         if personalized_offset is not None:
-            indoor_offset_mid = round(float(personalized_offset), 1)
             band_width = (personalized_band
                           if personalized_band is not None
                           else self.compute_band_width(onboarding_data or self.onboarding_data))
             personalized = True
         else:
-            indoor_offset_mid = self.compute_onboarding_temp_offset(onboarding_data or self.onboarding_data)
             band_width = self.compute_band_width(onboarding_data or self.onboarding_data)
             personalized = False
-        indoor_offset_low = indoor_offset_mid - band_width
-        indoor_offset_high = indoor_offset_mid + band_width
-        
-        # Compute RDS at three offset points
-        rds_low = self._compute_rds_single_offset(indoor_offset_low, debug=False)
-        rds_mid = self._compute_rds_single_offset(indoor_offset_mid, debug=debug)
-        rds_high = self._compute_rds_single_offset(indoor_offset_high, debug=False)
-        
-        # Consecutive nights computed using mid offset
-        consecutive_nights = self._compute_consecutive_nights(indoor_offset_mid)
+
+        rds_low = self._compute_rds_single_offset(
+            "low", personalized=personalized_offset, band_width=band_width,
+            onboarding_data=onboarding_data, climate_zone=climate_zone, debug=False
+        )
+        rds_mid = self._compute_rds_single_offset(
+            "mid", personalized=personalized_offset, band_width=band_width,
+            onboarding_data=onboarding_data, climate_zone=climate_zone, debug=debug
+        )
+        rds_high = self._compute_rds_single_offset(
+            "high", personalized=personalized_offset, band_width=band_width,
+            onboarding_data=onboarding_data, climate_zone=climate_zone, debug=False
+        )
+
+        # Consecutive nights computed using mid estimate
+        consecutive_nights = self._compute_consecutive_nights(
+            personalized=personalized_offset, onboarding_data=onboarding_data,
+            climate_zone=climate_zone
+        )
         
         if debug:
             _log.debug("="*60)
             _log.debug("RDS UNCERTAINTY BAND")
-            _log.debug("Indoor offset: %.1f degC (mid estimate, %s)", indoor_offset_mid,
-                       "personalized" if personalized else "onboarding")
+            _log.debug("Indoor offset: Variable (temp-dependent) if population, flat=%.1f if personalized",
+                       personalized_offset if personalized_offset is not None else 0.0)
             _log.debug("Band width: ±%.1f degC", band_width)
-            _log.debug("RDS low  (offset %.1f): %.1f", indoor_offset_low, rds_low)
-            _log.debug("RDS mid  (offset %.1f): %.1f", indoor_offset_mid, rds_mid)
-            _log.debug("RDS high (offset %.1f): %.1f", indoor_offset_high, rds_high)
+            _log.debug("RDS (low / mid / high): %.1f / %.1f / %.1f", rds_low, rds_mid, rds_high)
             _log.debug("="*60)
         
         return {
@@ -250,65 +326,79 @@ class RDSCalculator:
             'personalized': personalized,
         }
     
-    def _compute_rds_single_offset(self, indoor_offset, debug=False):
-        """Internal: compute RDS for a single indoor offset value"""
+    def _compute_rds_single_offset(self, tier, personalized=None, band_width=2.0,
+                                   onboarding_data=None, climate_zone="default", debug=False):
+        """Internal: compute RDS for one level of the uncertainty band (low/mid/high)"""
         total_rds = 0.0
         today = datetime.now().date()
-        
+        onb = onboarding_data or self.onboarding_data
+
         if debug:
-            _log.debug("RDS Calculation Breakdown:")
+            _log.debug("RDS Calculation Breakdown (Tier: %s, Zone: %s):", tier, climate_zone)
             _log.debug("%-12s %-8s %-8s %-9s %-8s %-10s %-10s %s",
                        "Date", "Temp", "Offset", "Eff Temp", "RFU", "Days Ago", "Weight", "Contribution")
-        
+
         sorted_nights = sorted(self.nighttime_temps, key=lambda x: x['date'], reverse=True)
         for night in sorted_nights:
-            days_ago = (today - night['date']).days
+            # Determine indoor offset for this specific night
+            if personalized is not None:
+                offset = float(personalized)
+            else:
+                offset = self.compute_onboarding_temp_offset(onb, outdoor_temp=night['temp'], climate_zone=climate_zone)
+
+            # Adjust for uncertainty band tier
+            if tier == "low":
+                offset -= band_width
+            elif tier == "high":
+                offset += band_width
+
+            # Clamp to >= 0: a future-dated night must never yield a decay
+            # weight > 1 (0.6^negative), which would inflate the score.
+            days_ago = max(0, (today - night['date']).days)
             night_humidity = night.get('humidity')
-            effective_temp = night['temp'] + indoor_offset
-            rfu = self.calculate_recovery_factor(night['temp'], indoor_offset, humidity=night_humidity)
+            rfu = self.calculate_recovery_factor(night['temp'], offset, humidity=night_humidity)
             weight = RDS_DECAY_FACTOR ** days_ago
             contribution = rfu * weight
             total_rds += contribution
-            
+
             if debug:
                 date_str = night['date'].strftime('%Y-%m-%d')
                 if days_ago == 0:
                     date_str += " (tonight)"
-                _log.debug("%-12s %.1fC  %+7.1f  %7.1fC  %6.1f  %9d  %9.3f  %11.1f",
-                           date_str, night['temp'], indoor_offset, effective_temp, rfu, days_ago, weight, contribution)
-        
-        if debug:
-            _log.debug("-" * 90)
-            _log.debug("Indoor offset applied: %+.1fC", indoor_offset)
-            _log.debug("Total RDS: %.1f", total_rds)
-        
-        return total_rds
-    
-    def _compute_consecutive_nights(self, indoor_offset):
-        """Internal: count consecutive recent nights that failed recovery.
+                _log.debug("%-12s %.1fC  %+7.2f  %7.1fC  %6.1f  %9d  %9.3f  %11.1f",
+                           date_str, night['temp'], offset, night['temp'] + offset, rfu, days_ago, weight, contribution)
 
-        A night 'fails' when its RFU > 0, computed by the same humidity-aware
-        logic used for scoring, so the consecutive-night count stays consistent
-        with the wet-bulb threshold when that mode is active.
-        """
+        # Hard-cap the multi-night Recovery Debt Score strictly at 100 (Satural saturation).
+        # Ensures that heatwaves of extreme length do not scale to infinity, 
+        # allowing for plausible recovery within a few cool nights.
+        return min(100.0, total_rds)
+    
+    def _compute_consecutive_nights(self, personalized=None, onboarding_data=None, climate_zone="default"):
+        """Internal: count consecutive recent nights that failed recovery."""
         consecutive_nights = 0
         first_hot_night_days_ago = -1
         today = datetime.now().date()
-        
+        onb = onboarding_data or self.onboarding_data
+
         sorted_nights = sorted(self.nighttime_temps, key=lambda x: x['date'], reverse=True)
         for night in sorted_nights:
-            days_ago = (today - night['date']).days
+            if personalized is not None:
+                offset = float(personalized)
+            else:
+                offset = self.compute_onboarding_temp_offset(onb, outdoor_temp=night['temp'], climate_zone=climate_zone)
+
+            days_ago = max(0, (today - night['date']).days)  # clamp: no future-date blowup
             rfu = self.calculate_recovery_factor(
-                night['temp'], indoor_offset, humidity=night.get('humidity')
+                night['temp'], offset, humidity=night.get('humidity')
             )
-            
+
             if rfu > 0:
                 if consecutive_nights == 0:
                     consecutive_nights = 1
                     first_hot_night_days_ago = days_ago
                 elif days_ago == first_hot_night_days_ago + consecutive_nights:
                     consecutive_nights += 1
-        
+
         return consecutive_nights
 
     def apply_sleep_checkin_adjustment(self, rds_dict, checkin=None):
@@ -494,10 +584,37 @@ class RDSCalculator:
             return None
 
         now = datetime.now()
+
+        # Keep only well-formed points: a real datetime timestamp and a finite
+        # numeric temp. A malformed point from the weather API is skipped, never
+        # allowed to crash the whole risk assessment.
+        valid_items = []
+        malformed = 0
+        for item in weather_forecast:
+            ts = item.get('timestamp')
+            temp = item.get('temp')
+            if not isinstance(ts, datetime) or temp is None:
+                malformed += 1
+                continue
+            try:
+                temp = float(temp)
+            except (TypeError, ValueError):
+                malformed += 1
+                continue
+            if not math.isfinite(temp):
+                malformed += 1
+                continue
+            valid_items.append({'timestamp': ts, 'temp': temp, 'humidity': item.get('humidity')})
+
+        if malformed:
+            _log.warning("Discarded %d malformed forecast points (bad timestamp or temp)", malformed)
+        if not valid_items:
+            _log.error("No well-formed forecast points available")
+            return None
+
         night_points = []  # (timestamp, temp, humidity)
         stale_count = 0
-
-        for item in weather_forecast:
+        for item in valid_items:
             if item['timestamp'] <= now:
                 stale_count += 1
                 continue  # Discard stale forecast points
@@ -514,7 +631,7 @@ class RDSCalculator:
             _log.warning("Discarded %d stale forecast points (timestamps in the past)", stale_count)
 
         if not night_points:
-            valid_future = [item for item in weather_forecast if item['timestamp'] > now]
+            valid_future = [item for item in valid_items if item['timestamp'] > now]
             if not valid_future:
                 _log.error("All forecast timestamps stale - no valid future data available")
                 return None

@@ -65,51 +65,79 @@ class LLMClient:
                 return self._chat_ollama(messages, temperature)
             raise
 
-    def extract_sleep_checkin(self, user_message: str) -> Dict[str, Any]:
-        """Extract deterministic sleep check-in fields from simple numbered replies."""
+    def extract_sleep_checkin(self, user_message: str, user_id: Optional[str] = None) -> Dict[str, Any]:
+        """Extract sleep check-in fields and apply dynamic profile updates if detected."""
         normalized = user_message.strip().lower()
-
+        
+        result = {}
+        # ... logic for simple numbered replies ...
         if normalized in {"1", "comfortable", "slept comfortably", "cool enough"}:
-            return {
-                "sleep_environment": "comfortable",
-                "sleep_quality": "good",
-                "cooling_issue": False,
-                "power_issue": False,
-                "confidence": "high",
+            result = {
+                "sleep_environment": "comfortable", "sleep_quality": "good",
+                "cooling_issue": False, "power_issue": False, "confidence": "high",
             }
-        if normalized in {"2", "warm", "warm but manageable", "manageable"}:
-            return {
-                "sleep_environment": "warm_manageable",
-                "sleep_quality": "moderate",
-                "cooling_issue": False,
-                "power_issue": False,
-                "confidence": "high",
+        elif normalized in {"2", "warm", "warm but manageable", "manageable"}:
+            result = {
+                "sleep_environment": "warm_manageable", "sleep_quality": "moderate",
+                "cooling_issue": False, "power_issue": False, "confidence": "high",
             }
-        if normalized in {"3", "too hot", "too hot to sleep", "too hot to sleep well"}:
-            return {
-                "sleep_environment": "too_hot",
-                "sleep_quality": "poor",
-                "cooling_issue": True,
-                "power_issue": False,
-                "confidence": "high",
+        elif normalized in {"3", "too hot", "too hot to sleep", "too hot to sleep well"}:
+            result = {
+                "sleep_environment": "too_hot", "sleep_quality": "poor",
+                "cooling_issue": True, "power_issue": False, "confidence": "high",
             }
-        if normalized in {"4", "power cut", "no fan", "fan issue", "ac issue", "fan/ac or power issue"}:
-            return {
-                "sleep_environment": "cooling_unavailable",
-                "sleep_quality": "poor",
-                "cooling_issue": True,
-                "power_issue": True,
-                "confidence": "high",
+        elif normalized in {"4", "power cut", "no fan", "fan issue", "ac issue", "fan/ac or power issue"}:
+            result = {
+                "sleep_environment": "cooling_unavailable", "sleep_quality": "poor",
+                "cooling_issue": True, "power_issue": True, "confidence": "high",
             }
+        else:
+            provider = build_provider(FrameworkSettings())
+            resp = provider.chat([
+                Message(Role.SYSTEM, (
+                    "Extract PRANA sleep recovery check-in data. Return ONLY compact JSON "
+                    "with the following fields:\n"
+                    "- sleep_environment: 'comfortable', 'warm_manageable', 'too_hot', 'cooling_unavailable'\n"
+                    "- sleep_quality: 'good', 'moderate', 'poor'\n"
+                    "- cooling_issue: boolean\n"
+                    "- power_issue: boolean\n"
+                    "- profile_updates: Optional dict with keys like 'floor_level' ('top' or 'other'), 'fan' (boolean), "
+                    "'windows_open' (boolean), 'ac' (boolean) if the user implies a change in their house/setup.\n"
+                    "- confidence: 'high' or 'low'.")),
+                Message(Role.USER, user_message),
+            ], temperature=0)
+            
+            import json
+            content = resp.content.strip()
+            if content.startswith("```json"):
+                content = content.replace("```json", "", 1).replace("```", "", 1).strip()
+            elif content.startswith("```"):
+                content = content.replace("```", "", 2).strip()
 
-        provider = build_provider(FrameworkSettings())
-        resp = provider.chat([
-            Message(Role.SYSTEM, (
-                "Extract PRANA sleep recovery check-in data. Return only compact JSON "
-                "with sleep_environment, sleep_quality, cooling_issue, power_issue, confidence.")),
-            Message(Role.USER, user_message),
-        ], temperature=0)
-        return {"raw_llm_response": resp.content, "confidence": "low"}
+            try:
+                result = json.loads(content)
+            except Exception:
+                result = {"raw_llm_response": resp.content, "confidence": "low"}
+
+        # --- DYNAMIC PROFILE OVERRIDE ---
+        if user_id and result.get("profile_updates"):
+            from prana.database import SessionLocal
+            from prana.models import UserProfile
+            db = SessionLocal()
+            try:
+                prof = db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+                if prof:
+                    updates = result["profile_updates"]
+                    if 'floor_level' in updates: prof.floor_level = updates['floor_level']
+                    if 'fan' in updates: prof.has_fan = updates['fan']
+                    if 'windows_open' in updates: prof.windows_open = updates['windows_open']
+                    if 'ac' in updates: prof.has_ac = updates['ac']
+                    db.commit()
+                    _log.info("Applied dynamic profile update for user %s: %s", user_id, updates)
+            finally:
+                db.close()
+                
+        return result
 
     def _chat_openrouter(self, messages: List[LLMMessage], temperature: float) -> str:
         if not self.openrouter_api_key:

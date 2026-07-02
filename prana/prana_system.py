@@ -39,6 +39,28 @@ class PRANASystem:
         self.current_rds = None
         self.current_ccri = None
         self.last_update = None
+        self._cached_forecast = None  # Degraded-state fallback cache
+        self.climate_zone = self._resolve_climate_zone(location_name)
+
+    def _resolve_climate_zone(self, location_name):
+        """Determine climate zone ('hot_humid', 'hot_dry', or 'default') for RDS logic.
+        
+        Chennai, Dhaka, Ho Chi Minh, Jakarta, Manila -> hot_humid (Coastal/Tropical)
+        Karachi, Delhi -> hot_dry (Arid/Semi-Arid)
+        """
+        loc = str(location_name).lower()
+        if any(city in loc for city in ["chennai", "dhaka", "ho chi minh", "jakarta", "manila", "faisalabad"]):
+            # Note: Faisalabad is dry but tends to be humid in monsoon; 
+            # following coastal/humid as a conservative baseline for SE Asia cities.
+            # Dhaka is the primary hot_humid reference.
+            if "dhaka" in loc or "chennai" in loc or "manila" in loc:
+                return "hot_humid"
+        if any(city in loc for city in ["delhi", "karachi"]):
+            return "hot_dry"
+        
+        # Defensive default: if we don't know the climate, assume humid for safety
+        # (top-floor heat trapping is more dangerous than over-predicting sky cooling).
+        return "hot_humid"
 
     def update_all(self, lat, lon, sleep_checkin=None, debug=False, personalization=None):
         """
@@ -69,9 +91,18 @@ class PRANASystem:
         logger.info("Step 2: Fetching weather forecast...")
         past_days = RDS_MAX_DAYS if not self.rds_calculator.nighttime_temps else 0
         forecast = self.data_fetcher.get_forecast(lat, lon, hours=24, past_days=past_days)
+        
         if not forecast:
-            logger.error("Failed to fetch forecast")
-            return None
+            if self._cached_forecast:
+                logger.warning("Forecast fetch failed; falling back to last cached forecast run.")
+                forecast = self._cached_forecast
+            else:
+                logger.error("Failed to fetch forecast and no cache available")
+                return None
+        else:
+            # Update cache on success
+            self._cached_forecast = forecast
+            
         logger.info("Forecast: %s data points retrieved", len(forecast))
 
         # Step 3: Calculate NDT
@@ -135,6 +166,8 @@ class PRANASystem:
 
         raw_rds_dict = self.rds_calculator.calculate_rds(
             debug=debug,
+            outdoor_night_temp=tonight_min,
+            climate_zone=self.climate_zone,
             personalized_offset=(personalization.get('offset') if personalization else None),
             personalized_band=(personalization.get('band') if personalization else None),
         )
