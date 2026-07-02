@@ -122,6 +122,44 @@ RDS_USE_WET_BULB = True
 # heat stress around a wet-bulb of ~28C.
 RDS_NIGHTTIME_WETBULB_THRESHOLD = 28.0  # Celsius - no recovery above this (wet-bulb scale)
 
+# ---------------------------------------------------------------------------
+# Sleep-debt ledger (RDS rebuild) -- debt is measured in MINUTES of sleep
+# lost to heat, replacing the unitless 0-100 score. See docs/RDS_MODEL.md.
+# ---------------------------------------------------------------------------
+
+# Per-night dose-response anchors: (effective_indoor_temp_C, minutes_lost).
+# Anchored to Minor et al. 2022 (One Earth, ~47k users / 7M nights): a night
+# minimum near 30C costs ~14 min of sleep vs a cool baseline; loss accelerates
+# with heat. Linearly interpolated between anchors, flat outside the range.
+SLEEP_LOSS_ANCHORS = [
+    (20.0, 0.0),
+    (25.0, 4.0),
+    (28.0, 9.0),
+    (30.0, 14.0),
+    (33.0, 22.0),
+    (35.0, 30.0),
+    (40.0, 55.0),
+    (45.0, 60.0),
+]
+
+# Debt ledger dynamics (minutes).
+RECOVERY_DEBT_CAP_MIN = 240          # ~4h max carried debt; replaces the old 100 cap
+RECOVERY_PER_COOL_NIGHT_MIN = 45     # minutes of debt cleared by one fully-cool night
+RECOVERY_WINDOW_NIGHTS = 7           # nights of history the ledger walks
+HOT_CLIMATE_SLEEP_MULTIPLIER = 1.0   # knob for Minor's 2.5-3x low-income finding (default off)
+
+# Debt-to-tier thresholds (minutes).
+RECOVERY_TIER_MODERATE_MIN = 30.0
+RECOVERY_TIER_HIGH_MIN = 90.0
+RECOVERY_TIER_SEVERE_MIN = 180.0
+
+# Temp-dependent AC offset (ASHRAE Global Thermal Comfort DB II finding):
+# homes WITHOUT AC run ~+3.5C hotter than AC homes at ~30C outdoor, gap widening
+# with heat. Expressed as effective indoor cooling = baseline + interaction * T,
+# giving ~-3.5C at 30C (base -1.5 + -0.0667*30). Replaces flat RDS_ONBOARDING_AC_OFFSET.
+RDS_ASHRAE_AC_BASELINE = -1.5
+RDS_ASHRAE_AC_INTERACTION = -0.0667
+
 # CCRI Thresholds
 CCRI_SAFE = 20
 CCRI_ELEVATED = 40
