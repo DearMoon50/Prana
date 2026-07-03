@@ -12,8 +12,7 @@ from datetime import datetime, timezone
 
 from framework.context.user import UserContext
 from framework.tools.base import Tool
-from framework.persistence.sqlite import SQLiteCheckinRepository
-from prana.config import DATABASE_URL, OPENAQ_API_KEY, OPENWEATHER_API_KEY
+from prana.config import OPENAQ_API_KEY, OPENWEATHER_API_KEY
 from prana.prana_system import PRANASystem
 
 # Map free-text/structured sleep descriptions to the canonical labels the
@@ -80,7 +79,8 @@ async def record_checkin(*, ctx: UserContext, sleep_quality: str) -> dict:
             pass
 
     checkin_date = datetime.now(timezone.utc).date().isoformat()
-    repo = SQLiteCheckinRepository(DATABASE_URL)
+    from prana.bot.bootstrap import build_checkin_repo
+    repo = build_checkin_repo()
     await repo.add(
         user_id=ctx.user_id,
         checkin_date=checkin_date,

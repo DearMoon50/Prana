@@ -55,6 +55,9 @@ RDS_DECAY_FACTOR = 0.8  # Half-life ~3.1 nights, ~41% of a night's debt remains
                         # analogy, not a fitted value: those studies measure
                         # hours-short chronic sleep restriction, not acute
                         # heat-driven single-night recovery failure.
+# TODO(vulnerability-tracks): per-tag threshold differentiation is deferred until there's
+# check-in data to calibrate it. Household-member tags are collected for that future
+# purpose but not yet wired into any scoring.
 RDS_MAX_DAYS = 4  # Track last 4 nights (debt persists across the window rather
                   # than fully clearing -- see RDS_DECAY_FACTOR above)
 

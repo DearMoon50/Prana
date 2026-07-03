@@ -58,6 +58,17 @@ CREATE TABLE IF NOT EXISTS risk_evaluations (
 )
 """
 
+_HOUSEHOLD_SCHEMA = """
+CREATE TABLE IF NOT EXISTS household_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    outdoor_worker INTEGER DEFAULT 0,
+    created_at TEXT
+)
+"""
+
 
 class SQLiteUserRepository:
     def __init__(self, db_path: str):
@@ -325,3 +336,62 @@ class SQLiteRiskEvalRepository:
                 (user_id, limit),
             ).fetchall()
         return [dict(r) for r in rows]
+
+
+class SQLiteHouseholdRepository:
+    """Stores household members for a user. Shares the one DB file."""
+
+    def __init__(self, db_path: str):
+        self.db_path = db_path.replace("sqlite:///", "").replace("sqlite://", "")
+        with self._conn() as c:
+            c.execute(_HOUSEHOLD_SCHEMA)
+
+    def _conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        # Enable WAL mode for better concurrency (multiple readers, one writer)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        return conn
+
+    async def add(self, user_id: str, name: str, tag: str, outdoor_worker: bool) -> int:
+        return await asyncio.to_thread(self._add, user_id, name, tag, outdoor_worker)
+
+    def _add(self, user_id: str, name: str, tag: str, outdoor_worker: bool) -> int:
+        with self._conn() as c:
+            cursor = c.execute(
+                """INSERT INTO household_members (user_id, name, tag, outdoor_worker, created_at)
+                   VALUES (?,?,?,?,?)""",
+                (user_id, name, tag, 1 if outdoor_worker else 0, datetime.now(timezone.utc).isoformat()),
+            )
+            return cursor.lastrowid
+
+    async def list_for_user(self, user_id: str) -> list[dict]:
+        return await asyncio.to_thread(self._list_for_user, user_id)
+
+    def _list_for_user(self, user_id: str) -> list[dict]:
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT * FROM household_members WHERE user_id=? ORDER BY id ASC", (user_id,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    async def update(self, member_id: int, name: str, tag: str, outdoor_worker: bool) -> bool:
+        return await asyncio.to_thread(self._update, member_id, name, tag, outdoor_worker)
+
+    def _update(self, member_id: int, name: str, tag: str, outdoor_worker: bool) -> bool:
+        with self._conn() as c:
+            cursor = c.execute(
+                """UPDATE household_members SET name=?, tag=?, outdoor_worker=?
+                   WHERE id=?""",
+                (name, tag, 1 if outdoor_worker else 0, member_id),
+            )
+            return cursor.rowcount > 0
+
+    async def delete(self, member_id: int) -> bool:
+        return await asyncio.to_thread(self._delete, member_id)
+
+    def _delete(self, member_id: int) -> bool:
+        with self._conn() as c:
+            cursor = c.execute("DELETE FROM household_members WHERE id=?", (member_id,))
+            return cursor.rowcount > 0

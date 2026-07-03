@@ -8,6 +8,7 @@ from framework.messaging.whatsapp import TwilioWhatsAppChannel
 from framework.persistence.sqlite import (
     SQLiteUserRepository, SQLiteCheckinRepository,
     SQLiteRDSStateRepository, SQLiteRiskEvalRepository,
+    SQLiteHouseholdRepository,
 )
 from framework.tools.base import ToolRegistry
 from framework.context.user import UserContext
@@ -69,6 +70,12 @@ def build_risk_eval_repo() -> SQLiteRiskEvalRepository:
     if "risk_eval_repo" not in _cache:
         _cache["risk_eval_repo"] = SQLiteRiskEvalRepository(DATABASE_URL)
     return _cache["risk_eval_repo"]
+
+
+def build_household_repo() -> SQLiteHouseholdRepository:
+    if "household_repo" not in _cache:
+        _cache["household_repo"] = SQLiteHouseholdRepository(DATABASE_URL)
+    return _cache["household_repo"]
 
 
 def build_commands() -> CommandRegistry:
