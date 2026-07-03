@@ -18,7 +18,7 @@ from prana.bot.bootstrap import (
 )
 from prana.config import UPDATE_INTERVAL, RDS_NIGHTTIME_THRESHOLD
 from prana.personalization import personalize_offset
-from prana.rds_calculator import RDSCalculator
+from prana.recovery.model import RecoveryModel
 from prana.prana_system import PRANASystem
 
 logger = logging.getLogger(__name__)
@@ -37,10 +37,10 @@ async def _cycle_once() -> int:
         if checkins:
             onb = user.metadata.get("onboarding") or {}
             dummy = PRANASystem(location_name=user.metadata.get("location_name") or "default")
-            prior_mean = RDSCalculator.compute_onboarding_temp_offset(
+            prior_mean = RecoveryModel.compute_onboarding_temp_offset(
                 onb, climate_zone=dummy.climate_zone
             )
-            prior_sd = RDSCalculator.compute_band_width(onb)
+            prior_sd = RecoveryModel.compute_band_width(onb)
             post = personalize_offset(prior_mean, prior_sd, checkins, RDS_NIGHTTIME_THRESHOLD)
             personalization = {
                 "offset": post.mean,

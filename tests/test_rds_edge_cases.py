@@ -1,61 +1,35 @@
-"""Edge-case hardening tests for RDSCalculator.
+"""Edge-case hardening tests for RecoveryModel (migrated from RDSCalculator, Task 12).
 
 Each test captures a real failure mode found by adversarial probing:
 invalid temps, future-dated nights, and out-of-range/invalid humidity.
 The model must degrade gracefully (skip/clamp), never crash or inflate.
+
+NOTE on deletion: the TestRFUExtremeHeatDistinguishable class (and the
+`_rfu_from_excess` helper it tested) is intentionally REMOVED here, not
+migrated. That helper implemented the old per-night RFU log-tail extension
+(a continuous continuation of the linear RFU-per-degC formula past a 10C
+excess threshold, so 42C/58C/80C nights stayed distinguishable). The
+sleep-debt-ledger rebuild replaces RFU entirely with the Minor-2022-anchored
+`minutes_lost` dose-response curve (prana.recovery.dose_response), which has
+no linear-then-log-tail shape and no 10C junction to be continuous at -- so
+those tests no longer describe anything that exists. Their actual intent
+(bounded, distinguishable behavior under extreme heat) is preserved by
+tests/recovery/test_dose_response.py and the ledger-cap tests in
+tests/recovery/test_ledger.py and test_model_calculate.py
+(test_rds_scale_capped_at_100_by_debt_cap), which assert the new curve is
+monotonic and the multi-night debt is bounded at RECOVERY_DEBT_CAP_MIN.
 """
 import math
 import unittest
 from datetime import date, datetime, timedelta
 
-from prana.rds_calculator import RDSCalculator, _rfu_from_excess, _stull_wet_bulb
-
-
-class TestRFUExtremeHeatDistinguishable(unittest.TestCase):
-    """A hard min(100, ...) cap used to make any excess > 10C score
-    identically (a 42C and a 58C night were indistinguishable). Fixed with a
-    continuous log-tail extension -- these tests pin the fix down."""
-
-    def test_realistic_range_unchanged(self):
-        # excess 0-10C (up to 42C effective) must match the original linear
-        # model exactly -- this is the entire range used by every existing
-        # proof/demo/case-study number in this codebase.
-        for excess, expected in [(2, 20.0), (5, 50.0), (8, 80.0), (10, 100.0)]:
-            self.assertAlmostEqual(_rfu_from_excess(excess), expected, places=6)
-
-    def test_extreme_values_are_distinguishable(self):
-        r42 = _rfu_from_excess(10)   # 42C effective
-        r58 = _rfu_from_excess(26)   # 58C effective
-        r80 = _rfu_from_excess(48)   # 80C effective
-        self.assertLess(r42, r58)
-        self.assertLess(r58, r80)
-
-    def test_continuous_at_junction(self):
-        # Value and slope must both be continuous at excess=10, so this is a
-        # genuine curve continuation, not a discontinuous patch.
-        self.assertAlmostEqual(_rfu_from_excess(9.999), _rfu_from_excess(10.001), places=1)
-        h = 1e-4
-        left_slope = (_rfu_from_excess(10) - _rfu_from_excess(10 - h)) / h
-        right_slope = (_rfu_from_excess(10 + h) - _rfu_from_excess(10)) / h
-        self.assertAlmostEqual(left_slope, right_slope, places=1)
-
-    def test_negative_and_zero_excess_is_zero(self):
-        self.assertEqual(_rfu_from_excess(0), 0.0)
-        self.assertEqual(_rfu_from_excess(-5), 0.0)
-
-    def test_extreme_night_still_bounded_at_rds_level(self):
-        # Per-night RFU can now exceed 100, but the multi-night RDS total
-        # must still be capped at 100 -- the system stays safely bounded.
-        calc = RDSCalculator()
-        calc.add_night_temperature(80.0, date.today())
-        result = calc.calculate_rds()
-        self.assertLessEqual(result["rds_mid"], 100.0)
-        self.assertTrue(math.isfinite(result["rds_mid"]))
+from prana.recovery.model import RecoveryModel
+from prana.recovery.wetbulb import wet_bulb_stull
 
 
 class TestInvalidTemperature(unittest.TestCase):
     def test_none_temp_is_ignored_not_crash(self):
-        c = RDSCalculator()
+        c = RecoveryModel()
         c.add_night_temperature(None, date.today())
         c.add_night_temperature(34.0, date.today() - timedelta(days=1))
         result = c.calculate_rds()  # must not raise
@@ -64,14 +38,14 @@ class TestInvalidTemperature(unittest.TestCase):
         self.assertTrue(math.isfinite(result["rds_mid"]))
 
     def test_nan_temp_is_ignored(self):
-        c = RDSCalculator()
+        c = RecoveryModel()
         c.add_night_temperature(float("nan"), date.today())
         result = c.calculate_rds()
         self.assertEqual(result["rds_mid"], 0.0)
         self.assertEqual(result["consecutive_nights"], 0)
 
     def test_only_invalid_temps_gives_zero(self):
-        c = RDSCalculator()
+        c = RecoveryModel()
         c.add_night_temperature(None, date.today())
         c.add_night_temperature(float("nan"), date.today() - timedelta(days=1))
         result = c.calculate_rds()
@@ -80,35 +54,38 @@ class TestInvalidTemperature(unittest.TestCase):
 
 class TestFutureDatedNight(unittest.TestCase):
     def test_future_night_does_not_inflate(self):
-        # A night dated in the future must not produce a decay weight > 1.
-        c = RDSCalculator()
+        # A night dated in the future must not produce extra debt beyond
+        # what that single night's own dose-response contributes.
+        c = RecoveryModel()
         c.add_night_temperature(34.0, date.today() + timedelta(days=3))
         result = c.calculate_rds()
-        # RFU(34) = 20 at weight <= 1, so RDS must be <= 20 (not 92.6).
-        self.assertLessEqual(result["rds_mid"], 20.0 + 1e-6)
+        solo = RecoveryModel()
+        solo.add_night_temperature(34.0, date.today())
+        self.assertAlmostEqual(result["debt_minutes_mid"], solo.calculate_rds()["debt_minutes_mid"], places=5)
         self.assertTrue(math.isfinite(result["rds_mid"]))
 
     def test_future_plus_today_bounded(self):
-        c = RDSCalculator()
+        c = RecoveryModel()
         c.add_night_temperature(34.0, date.today() + timedelta(days=2))
         c.add_night_temperature(34.0, date.today())
         result = c.calculate_rds()
-        # Two nights, each RFU 20 at weight <= 1 => at most 40.
-        self.assertLessEqual(result["rds_mid"], 40.0 + 1e-6)
+        # Bounded by the debt cap regardless of future-dating.
+        self.assertLessEqual(result["debt_minutes_mid"], 240.0 + 1e-6)
+        self.assertTrue(math.isfinite(result["rds_mid"]))
 
 
 class TestInvalidHumidity(unittest.TestCase):
     def test_negative_humidity_no_crash(self):
-        self.assertIsNone(_stull_wet_bulb(32, -10))  # guarded, no domain error
-        c = RDSCalculator()
+        self.assertIsNone(wet_bulb_stull(32, -10))  # guarded, no domain error
+        c = RecoveryModel()
         c.add_night_temperature(34.0, date.today(), humidity=-10)
         result = c.calculate_rds()  # must not raise
         self.assertTrue(math.isfinite(result["rds_mid"]))
 
     def test_nan_humidity_falls_back_to_dry(self):
-        c = RDSCalculator()
+        c = RecoveryModel()
         c.add_night_temperature(34.0, date.today(), humidity=float("nan"))
-        dry_only = RDSCalculator()
+        dry_only = RecoveryModel()
         dry_only.add_night_temperature(34.0, date.today())  # no humidity
         self.assertAlmostEqual(
             c.calculate_rds()["rds_mid"], dry_only.calculate_rds()["rds_mid"], places=5
@@ -116,9 +93,9 @@ class TestInvalidHumidity(unittest.TestCase):
 
     def test_humidity_above_100_clamped(self):
         # 150% RH must behave identically to 100% RH (clamped), not inflate past it.
-        hi = RDSCalculator()
+        hi = RecoveryModel()
         hi.add_night_temperature(33.0, date.today(), humidity=150)
-        clamp = RDSCalculator()
+        clamp = RecoveryModel()
         clamp.add_night_temperature(33.0, date.today(), humidity=100)
         self.assertAlmostEqual(
             hi.calculate_rds()["rds_mid"], clamp.calculate_rds()["rds_mid"], places=5
@@ -129,7 +106,7 @@ class TestForecastEstimatorRobustness(unittest.TestCase):
     """Malformed weather-API points must be skipped, never crash the assessment."""
 
     def setUp(self):
-        self.c = RDSCalculator()
+        self.c = RecoveryModel()
 
     def test_point_missing_temp_is_skipped(self):
         fut = datetime.now() + timedelta(hours=10)
@@ -177,13 +154,13 @@ class TestBandOrderingHolds(unittest.TestCase):
             None,
         ]
         for onb in scenarios:
-            c = RDSCalculator(onboarding_data=onb)
+            c = RecoveryModel(onboarding_data=onb)
             for da, t in [(3, 38.0), (2, 39.0), (1, 30.0), (0, 34.0)]:
                 c.add_night_temperature(t, date.today() - timedelta(days=da), humidity=70)
             self._assert_ordered(c.calculate_rds(climate_zone="hot_humid"))
 
     def test_ordering_with_personalized_offset(self):
-        c = RDSCalculator()
+        c = RecoveryModel()
         c.add_night_temperature(35.0, date.today(), humidity=60)
         self._assert_ordered(
             c.calculate_rds(personalized_offset=2.5, personalized_band=1.0)

@@ -6,7 +6,7 @@ from prana.data_fetcher import DataFetcher
 from prana.ha_aqi_calculator import HAAQICalculator
 from prana.ndt_calculator import NDTCalculator
 from prana.prana_system import PRANASystem
-from prana.rds_calculator import RDSCalculator
+from prana.recovery.model import RecoveryModel
 
 
 class AQIComponentTests(unittest.TestCase):
@@ -128,27 +128,49 @@ class HeatPollutionRiskTests(unittest.TestCase):
 
 
 class RDSTests(unittest.TestCase):
-    def test_rds_accumulates_recent_hot_nights_with_decay(self):
-        calculator = RDSCalculator()
+    """Migrated to RecoveryModel (Task 12). The old model's exact numbers
+    (RFU linear-per-degC over a 32C cliff, 0.8^days_ago decay, min(100,total)
+    cap) no longer have meaning under the sleep-debt ledger: dose-response is
+    now a continuous curve anchored to Minor et al. 2022, and recovery is a
+    fixed per-cool-night paydown rather than decay. These assertions are
+    re-expressed behaviourally (monotonic, bounded, silent-when-cool) so the
+    original coverage intent survives without pinning stale numbers."""
+
+    def test_rds_accumulates_recent_hot_nights(self):
+        calculator = RecoveryModel()
         today = date.today()
         calculator.add_night_temperature(34.0, today)
         calculator.add_night_temperature(34.0, today - timedelta(days=1))
 
         result = calculator.calculate_rds()
 
-        # RFU(34C) = (34-32)/10*100 = 20 per night; decay 0.8 (see config.py
-        # RDS_DECAY_FACTOR -- literature-consistent slow multi-night recovery):
-        # tonight 20*0.8^0 + yesterday 20*0.8^1 = 20 + 16 = 36.
-        self.assertAlmostEqual(result['rds_mid'], 36.0, places=1)
+        # Two hot nights back-to-back must accrue nonzero debt and both count
+        # as consecutive impaired nights.
+        self.assertGreater(result['rds_mid'], 0.0)
+        self.assertGreater(result['debt_minutes_mid'], 0.0)
         self.assertEqual(result['consecutive_nights'], 2)
 
+    def test_more_hot_nights_means_more_debt(self):
+        one_night = RecoveryModel()
+        one_night.add_night_temperature(34.0, date.today())
+
+        two_nights = RecoveryModel()
+        two_nights.add_night_temperature(34.0, date.today() - timedelta(days=1))
+        two_nights.add_night_temperature(34.0, date.today())
+
+        self.assertGreater(
+            two_nights.calculate_rds()['debt_minutes_mid'],
+            one_night.calculate_rds()['debt_minutes_mid'],
+        )
+
     def test_cool_night_has_zero_recovery_failure(self):
-        calculator = RDSCalculator()
-        calculator.add_night_temperature(28.0, date.today())
+        calculator = RecoveryModel()
+        calculator.add_night_temperature(20.0, date.today())
 
         result = calculator.calculate_rds()
 
         self.assertEqual(result['rds_mid'], 0.0)
+        self.assertEqual(result['debt_minutes_mid'], 0.0)
         self.assertEqual(result['consecutive_nights'], 0)
 
     def test_onboarding_adjustment_increases_rds_for_tin_roof_top_floor(self):
@@ -157,10 +179,10 @@ class RDSTests(unittest.TestCase):
         # top-floor home accrues at least as much recovery debt as an
         # unspecified-envelope home at the same outdoor temperature.
         today = date.today()
-        tin_top = RDSCalculator(
+        tin_top = RecoveryModel(
             onboarding_data={'ac': False, 'roof_material': 'tin', 'floor_level': 'top'}
         )
-        plain = RDSCalculator()
+        plain = RecoveryModel()
         for calc in (tin_top, plain):
             calc.add_night_temperature(34.0, today)
 
@@ -171,24 +193,24 @@ class RDSTests(unittest.TestCase):
 
     def test_onboarding_adjustment_reduces_rds_for_ac(self):
         onboarding = {'ac': True, 'roof_material': 'concrete', 'floor_level': 'ground'}
-        calculator = RDSCalculator(onboarding_data=onboarding)
+        calculator = RecoveryModel(onboarding_data=onboarding)
         today = date.today()
         calculator.add_night_temperature(33.0, today)
 
-        no_adjust = RDSCalculator()
+        no_adjust = RecoveryModel()
         no_adjust.add_night_temperature(33.0, today)
 
         result_with = calculator.calculate_rds()
         result_without = no_adjust.calculate_rds()
 
-        # AC offset = -3.0, so effective temp = 30.0 < 32 => RFU = 0
-        self.assertEqual(result_with['rds_mid'], 0.0)
-        # Without adjustment, 33C > 32C => RFU > 0
+        # AC (temp-dependent ASHRAE offset) must strictly reduce debt relative
+        # to the same night with no cooling.
+        self.assertLess(result_with['debt_minutes_mid'], result_without['debt_minutes_mid'])
         self.assertGreater(result_without['rds_mid'], 0.0)
 
     def test_onboarding_adjustment_no_onboarding_matches_standard(self):
-        standard = RDSCalculator()
-        with_onboarding = RDSCalculator(onboarding_data=None)
+        standard = RecoveryModel()
+        with_onboarding = RecoveryModel(onboarding_data=None)
         today = date.today()
         standard.add_night_temperature(34.0, today)
         with_onboarding.add_night_temperature(34.0, today)
@@ -199,37 +221,39 @@ class RDSTests(unittest.TestCase):
         self.assertAlmostEqual(result_std['rds_mid'], result_wob['rds_mid'], places=5)
 
     def test_rds_empty_nights_returns_zero(self):
-        result = RDSCalculator().calculate_rds()
+        result = RecoveryModel().calculate_rds()
         self.assertEqual(result['rds_mid'], 0.0)
         self.assertEqual(result['consecutive_nights'], 0)
 
-    def test_rds_extreme_heat_caps_rfu(self):
-        calc = RDSCalculator()
+    def test_rds_extreme_heat_bounded_at_cap(self):
+        calc = RecoveryModel()
         calc.add_night_temperature(60.0, date.today())
         result = calc.calculate_rds()
-        # RFU capped at 100, so RDS <= 100
-        self.assertAlmostEqual(result['rds_mid'], 100.0, places=1)
+        # A single extreme night is bounded by the debt cap (legacy 0-100 scale).
+        self.assertLessEqual(result['rds_mid'], 100.0)
         self.assertEqual(result['consecutive_nights'], 1)
 
     def test_rds_single_cool_night_all_past_hot(self):
-        calc = RDSCalculator()
+        calc = RecoveryModel()
         today = date.today()
         calc.add_night_temperature(34.0, today - timedelta(days=2))
         calc.add_night_temperature(35.0, today - timedelta(days=1))
-        calc.add_night_temperature(28.0, today)
+        calc.add_night_temperature(20.0, today)
         result = calc.calculate_rds()
-        # Consecutive hot nights: yesterday (35C) + day before (34C) = 2
-        self.assertEqual(result['consecutive_nights'], 2)
-        # RDS should reflect past hot nights with decay
-        self.assertGreater(result['rds_mid'], 0.0)
+        # Tonight is cool (0 loss) so the consecutive-impaired-nights streak
+        # (counted most-recent-first) is broken immediately -> 0, not 2.
+        self.assertEqual(result['consecutive_nights'], 0)
+        # But debt from the two past hot nights is still carried (ledger,
+        # not decay-to-zero).
+        self.assertGreater(result['debt_minutes_mid'], 0.0)
 
     def test_rds_onboarding_adjustment_via_method_arg(self):
-        calc = RDSCalculator()
+        calc = RecoveryModel()
         calc.add_night_temperature(33.0, date.today())
         result_no = calc.calculate_rds()
         result_ac = calc.calculate_rds(onboarding_data={'ac': True})
-        # With AC (-3C), effective temp = 30 < 32 -> RFU = 0
-        self.assertEqual(result_ac['rds_mid'], 0.0)
+        # AC must reduce (not necessarily zero) debt relative to no onboarding.
+        self.assertLess(result_ac['debt_minutes_mid'], result_no['debt_minutes_mid'])
         self.assertGreater(result_no['rds_mid'], 0.0)
 
 

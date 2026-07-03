@@ -1,12 +1,19 @@
-"""RDS suitability demonstration.
+"""Sleep-debt ledger suitability demonstration.
 
-Proves three claims that together mean "RDS is suitable to ship in PRANA":
+Proves three claims that together mean "the sleep-debt ledger is suitable to
+ship in PRANA":
 
-  1. CORRECT      - RDS computes what it specifies (the test suite is green).
+  1. CORRECT      - the ledger computes what it specifies (the test suite is
+                    green: 55 tests in tests/recovery/ plus migrated legacy
+                    tests).
   2. GROUNDED     - the indoor offset is fit from real datasets, not guessed
-                    (ASHRAE DB II AC coefficient; South Asia corroboration).
-  3. DIFFERENTIATED - a scenario where RDS stays elevated on accumulated
-                    recovery debt while a naive tonight-only forecast says "fine".
+                    (ASHRAE DB II AC coefficient, now wired directly into the
+                    temp-dependent offset -- see RDS_ASHRAE_AC_BASELINE/
+                    RDS_ASHRAE_AC_INTERACTION in prana/config.py; South Asia
+                    corroboration for the roof/floor envelope).
+  3. DIFFERENTIATED - a scenario where the ledger stays elevated on
+                    accumulated sleep-debt minutes while a naive tonight-only
+                    forecast says "fine".
 
 Run:
     python -m research.rds_demo.demo <path/to/ashrae_db2.01.csv>
@@ -21,7 +28,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from prana.config import RDS_NIGHTTIME_THRESHOLD
-from prana.rds_calculator import RDSCalculator
+from prana.recovery.model import RecoveryModel
 
 _REPORT = Path(__file__).parent / "RDS_DEMO_REPORT.md"
 
@@ -45,7 +52,7 @@ def run_scenario() -> dict:
     temps = [  # (days_ago, outdoor night min C)
         (3, 35.0), (2, 36.0), (1, 34.0), (0, 30.0),  # tonight cools to 30
     ]
-    calc = RDSCalculator()
+    calc = RecoveryModel()
     for days_ago, t in temps:
         calc.add_night_temperature(t, today - timedelta(days=days_ago))
 
@@ -72,14 +79,17 @@ def _fmt_scenario(s: dict) -> list[str]:
     lines += [
         "",
         f"- **Naive tonight-only forecast:** {s['naive']}",
-        f"- **RDS (low/mid/high):** {s['rds']['rds_low']:.1f} / "
-        f"{s['rds']['rds_mid']:.1f} / {s['rds']['rds_high']:.1f} "
-        f"(consecutive hot nights: {s['rds']['consecutive_nights']})",
-        f"- **RDS message:** {s['message']}",
+        f"- **Sleep debt, low/mid/high (minutes):** {s['rds']['debt_minutes_low']:.0f} / "
+        f"{s['rds']['debt_minutes_mid']:.0f} / {s['rds']['debt_minutes_high']:.0f} "
+        f"(tier: {s['rds']['tier']}; consecutive impaired nights: "
+        f"{s['rds']['consecutive_nights']})",
+        f"- **Legacy 0-100 projection (debt/{240:.0f}min*100):** "
+        f"{s['rds']['rds_low']:.1f} / {s['rds']['rds_mid']:.1f} / {s['rds']['rds_high']:.1f}",
+        f"- **Message:** {s['message']}",
         "",
-        "The forecast says tonight is fine; RDS still flags accumulated recovery "
-        "debt from the preceding hot nights. That gap is what RDS adds over a "
-        "plain forecast.",
+        "The forecast says tonight is fine; the ledger still reports real minutes "
+        "of accumulated sleep debt from the preceding hot nights. That gap is "
+        "what the ledger adds over a plain forecast.",
         "",
     ]
     return lines
@@ -117,7 +127,11 @@ def _fmt_grounding(ashrae: dict | None) -> list[str]:
         f"outdoor temperature, homes WITHOUT AC run **{nv_effect:+.1f}C hotter** "
         f"than air-conditioned homes, and the gap widens as it gets hotter. "
         f"Equivalently, AC provides roughly {-nv_effect:.1f}C of effective "
-        f"cooling — real-data support for PRANA's hand-set AC offset (-3.0C).",
+        f"cooling. This coefficient is now WIRED DIRECTLY into the model as a "
+        f"temperature-dependent offset (RDS_ASHRAE_AC_BASELINE=-1.5, "
+        f"RDS_ASHRAE_AC_INTERACTION=-0.0667 in prana/config.py, giving ~-3.5C at "
+        f"30C outdoor and widening with heat), replacing the old flat -3.0C "
+        f"assumption.",
         "",
         "_Caveats: ASHRAE outdoor is a monthly mean, observations are daytime "
         "comfort votes, and the AC signal is office-dominated (homes had too few "
@@ -136,10 +150,13 @@ def build_report(scenario: dict, ashrae: dict | None, tests_green: bool) -> str:
         "",
         "## Claim 1 — Correct",
         "",
-        f"- RDS test suite: **{'GREEN' if tests_green else 'CHECK'}** "
-        "(tests/test_formulas.py, test_issue1_rds_bands.py, test_personalization.py).",
-        "- RDS is deterministic and its uncertainty band is ordered "
-        "(low <= mid <= high).",
+        f"- Sleep-debt ledger test suite: **{'GREEN' if tests_green else 'CHECK'}** "
+        "(tests/recovery/ — 55 tests covering wetbulb, indoor_climate, "
+        "dose_response, ledger, forecast, and the RecoveryModel facade — plus "
+        "migrated legacy tests in tests/test_formulas.py, "
+        "test_issue1_rds_bands.py, test_personalization.py).",
+        "- The ledger is deterministic and its uncertainty band is ordered "
+        "(low <= mid <= high, in both debt-minutes and the legacy 0-100 scale).",
         "",
     ]
     lines += _fmt_grounding(ashrae)
@@ -147,10 +164,10 @@ def build_report(scenario: dict, ashrae: dict | None, tests_green: bool) -> str:
     lines += [
         "## Acknowledged limitations (honest scope)",
         "",
-        "- The multi-night **compounding/decay mechanism** (thresholds, decay "
-        "factor, RFU slope) is a calibrated **hypothesis with uncertainty "
-        "bands**, not validated against health/sleep outcomes. No dataset here "
-        "proves it.",
+        "- The multi-night **debt ledger mechanism** (the Minor-2022 dose-response "
+        "anchors, the bounded recovery rate/threshold, the debt cap) is a "
+        "calibrated **hypothesis with uncertainty bands**, not validated against "
+        "health/sleep outcomes. No dataset here proves the exact rate.",
         "- The offset grounding rests on **daytime comfort / monthly-mean "
         "outdoor** proxies, not nightly sleep measurements.",
         "- Personalization learns **per-user only**; it does not yet improve the "
@@ -158,10 +175,12 @@ def build_report(scenario: dict, ashrae: dict | None, tests_green: bool) -> str:
         "",
         "## Verdict",
         "",
-        "RDS is correct, its offset inputs are grounded in real global data, and "
-        "it demonstrably flags recovery debt a plain forecast misses. It is "
-        "suitable to ship as a PRANA MVP component, with the compounding model "
-        "presented honestly as a calibrated hypothesis.",
+        "The sleep-debt ledger is correct, its offset inputs are grounded in real "
+        "global data (including the AC coefficient, now wired directly into the "
+        "model), and it demonstrably flags real minutes of accumulated sleep "
+        "debt that a plain forecast misses. It is suitable to ship as a PRANA "
+        "MVP component, with the debt-ledger mechanism presented honestly as a "
+        "calibrated hypothesis.",
         "",
     ]
     return "\n".join(lines)
@@ -177,7 +196,9 @@ def main() -> None:
     scenario = run_scenario()
     print("\n--- SCENARIO ---")
     print("naive forecast:", scenario["naive"])
-    print("RDS mid:", scenario["rds"]["rds_mid"],
+    print("debt_minutes_mid:", scenario["rds"]["debt_minutes_mid"],
+          "(legacy rds_mid:", scenario["rds"]["rds_mid"], ")",
+          "tier:", scenario["rds"]["tier"],
           "consecutive:", scenario["rds"]["consecutive_nights"])
     print("message:", scenario["message"])
 

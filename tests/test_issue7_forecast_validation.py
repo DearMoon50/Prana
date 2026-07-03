@@ -2,12 +2,12 @@
 
 import unittest
 from datetime import datetime, timedelta
-from prana.rds_calculator import RDSCalculator
+from prana.recovery.model import RecoveryModel
 
 
 class TestIssue7ForecastTimestampValidation(unittest.TestCase):
     def setUp(self):
-        self.calculator = RDSCalculator()
+        self.calculator = RecoveryModel()
     
     def test_stale_timestamps_discarded(self):
         """Forecast points with timestamps in the past should be discarded"""

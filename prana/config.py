@@ -44,26 +44,20 @@ OAF_BLEND_WEIGHT = 0.5  # Weight for heat-driven ozone increment blended into ba
 OZONE_HEAT_COUPLING_THRESHOLD_AQI = 50  # Only apply heat factor when O3 AQI >= this (NOx-limited below)
 
 # Recovery Debt Score
+# RDS_NIGHTTIME_THRESHOLD is retained only as a reference point for the naive
+# tonight-only forecast baseline in research/rds_demo/demo.py -- the ledger
+# itself has no hard threshold (see SLEEP_LOSS_ANCHORS below, a continuous
+# curve). RDS_DECAY_FACTOR, RDS_MAX_DAYS, and RDS_ONBOARDING_AC_OFFSET from the
+# old model were retired by the sleep-debt-ledger rebuild (see
+# RECOVERY_WINDOW_NIGHTS, RECOVERY_PER_COOL_NIGHT_MIN, and
+# RDS_ASHRAE_AC_BASELINE/RDS_ASHRAE_AC_INTERACTION further below) and removed.
 RDS_NIGHTTIME_THRESHOLD = 32.0  # Celsius - no recovery above this (dry-bulb scale)
-RDS_DECAY_FACTOR = 0.8  # Half-life ~3.1 nights, ~41% of a night's debt remains
-                        # after 4 nights. Direction (slow multi-night recovery,
-                        # not a single-night reset) is consistent with chronic
-                        # sleep-restriction recovery studies -- e.g. 5 nights of
-                        # restriction requiring ~7 nights to return to baseline,
-                        # deficits still measurable after multiple recovery
-                        # nights (see docs/RDS_MODEL.md SS3.3). This is an
-                        # analogy, not a fitted value: those studies measure
-                        # hours-short chronic sleep restriction, not acute
-                        # heat-driven single-night recovery failure.
 # TODO(vulnerability-tracks): per-tag threshold differentiation is deferred until there's
 # check-in data to calibrate it. Household-member tags are collected for that future
 # purpose but not yet wired into any scoring.
-RDS_MAX_DAYS = 4  # Track last 4 nights (debt persists across the window rather
-                  # than fully clearing -- see RDS_DECAY_FACTOR above)
 
 # --- Indoor temperature offset model (effective sleeping temp vs outdoor) ---
 # Cooling devices (negative = cooler indoors)
-RDS_ONBOARDING_AC_OFFSET = -3.0  # degC: effective indoor temp reduction from AC (PROTOTYPE_ASSUMPTION; AC usage variance is large)
 RDS_ONBOARDING_FAN_OFFSET = -2.0  # degC: equivalent cooling effect of a fan at sleep (~1 m/s airflow, ASHRAE 55 elevated air speed)
 RDS_ONBOARDING_WINDOW_OFFSET = -1.5  # degC: night ventilation / cross-breeze when windows kept open (PROTOTYPE_ASSUMPTION)
 # Building envelope (positive = hotter indoors)
@@ -121,6 +115,45 @@ RDS_USE_WET_BULB = True
 # scale. Physiological heat-strain literature places uncompensable nighttime
 # heat stress around a wet-bulb of ~28C.
 RDS_NIGHTTIME_WETBULB_THRESHOLD = 28.0  # Celsius - no recovery above this (wet-bulb scale)
+
+# ---------------------------------------------------------------------------
+# Sleep-debt ledger (RDS rebuild) -- debt is measured in MINUTES of sleep
+# lost to heat, replacing the unitless 0-100 score. See docs/RDS_MODEL.md.
+# ---------------------------------------------------------------------------
+
+# Per-night dose-response anchors: (effective_indoor_temp_C, minutes_lost).
+# Anchored to Minor et al. 2022 (One Earth, ~47k users / 7M nights): a night
+# minimum near 30C costs ~14 min of sleep vs a cool baseline; loss accelerates
+# with heat. Linearly interpolated between anchors, flat outside the range.
+SLEEP_LOSS_ANCHORS = [
+    (20.0, 0.0),
+    (25.0, 4.0),
+    (28.0, 9.0),
+    (30.0, 14.0),
+    (33.0, 22.0),
+    (35.0, 30.0),
+    (40.0, 55.0),
+    (45.0, 60.0),
+]
+
+# Debt ledger dynamics (minutes).
+RECOVERY_DEBT_CAP_MIN = 240          # ~4h max carried debt; replaces the old 100 cap
+RECOVERY_PER_COOL_NIGHT_MIN = 45     # minutes of debt cleared by one recovering night (see RECOVERY_NIGHT_LOSS_THRESHOLD_MIN)
+RECOVERY_NIGHT_LOSS_THRESHOLD_MIN = 5  # a night losing < this counts as a recovering night
+RECOVERY_WINDOW_NIGHTS = 7           # nights of history the ledger walks
+HOT_CLIMATE_SLEEP_MULTIPLIER = 1.0   # knob for Minor's 2.5-3x low-income finding (default off)
+
+# Debt-to-tier thresholds (minutes).
+RECOVERY_TIER_MODERATE_MIN = 30.0
+RECOVERY_TIER_HIGH_MIN = 90.0
+RECOVERY_TIER_SEVERE_MIN = 180.0
+
+# Temp-dependent AC offset (ASHRAE Global Thermal Comfort DB II finding):
+# homes WITHOUT AC run ~+3.5C hotter than AC homes at ~30C outdoor, gap widening
+# with heat. Expressed as effective indoor cooling = baseline + interaction * T,
+# giving ~-3.5C at 30C (base -1.5 + -0.0667*30). Replaces flat RDS_ONBOARDING_AC_OFFSET.
+RDS_ASHRAE_AC_BASELINE = -1.5
+RDS_ASHRAE_AC_INTERACTION = -0.0667
 
 # CCRI Thresholds
 CCRI_SAFE = 20

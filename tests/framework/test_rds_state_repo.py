@@ -30,20 +30,21 @@ def test_load_unknown_user_returns_empty_list(tmp_path):
     assert _run(repo.load("nobody")) == []
 
 
-def test_save_caps_at_rds_max_days_newest_kept(tmp_path):
-    from prana.config import RDS_MAX_DAYS
-
-    repo = SQLiteRDSStateRepository(str(tmp_path / "t.db"))
+def test_save_caps_at_max_days_newest_kept(tmp_path):
+    # Explicit max_days so this test is self-contained and doesn't depend on
+    # whatever window PRANA's ledger currently uses (RECOVERY_WINDOW_NIGHTS).
+    max_days = 4
+    repo = SQLiteRDSStateRepository(str(tmp_path / "t.db"), max_days=max_days)
     temps = [
         {"date": date(2026, 6, d), "temp": 30.0 + d}
-        for d in range(1, RDS_MAX_DAYS + 5)
+        for d in range(1, max_days + 5)
     ]
     _run(repo.save("+912", temps))
     loaded = _run(repo.load("+912"))
 
-    assert len(loaded) == RDS_MAX_DAYS
+    assert len(loaded) == max_days
     kept_dates = {t["date"] for t in loaded}
-    assert date(2026, 6, RDS_MAX_DAYS + 4) in kept_dates
+    assert date(2026, 6, max_days + 4) in kept_dates
     assert date(2026, 6, 1) not in kept_dates
 
 

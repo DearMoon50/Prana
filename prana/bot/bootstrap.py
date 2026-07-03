@@ -61,8 +61,8 @@ def build_checkin_repo() -> SQLiteCheckinRepository:
 
 def build_rds_repo() -> SQLiteRDSStateRepository:
     if "rds_repo" not in _cache:
-        from prana.config import RDS_MAX_DAYS
-        _cache["rds_repo"] = SQLiteRDSStateRepository(DATABASE_URL, max_days=RDS_MAX_DAYS)
+        from prana.config import RECOVERY_WINDOW_NIGHTS
+        _cache["rds_repo"] = SQLiteRDSStateRepository(DATABASE_URL, max_days=RECOVERY_WINDOW_NIGHTS)
     return _cache["rds_repo"]
 
 
