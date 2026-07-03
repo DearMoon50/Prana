@@ -51,16 +51,18 @@ def test_get_risk_seeds_historical_temps(monkeypatch):
     }
 
 
-def test_cycle_once_passes_history_and_personalization(monkeypatch):
+def test_cycle_once_records_risk_eval_and_persists_rds_state(monkeypatch):
     captured = {}
 
     class FakeRDSRepo:
-        async def load(self, user_id):
-            return [{"date": date(2026, 7, 1), "temp": 33.0}]
+        async def save(self, user_id, nighttime_temps):
+            captured["saved_user_id"] = user_id
+            captured["saved_temps"] = nighttime_temps
 
-    class FakeCheckinRepo:
-        async def list_for_user(self, user_id, limit=30):
-            return [{"checkin_date": "2026-07-01", "sleep_quality": "good"}]
+    class FakeRiskEvalRepo:
+        async def add(self, user_id, **kwargs):
+            captured["eval_user_id"] = user_id
+            captured["eval_kwargs"] = kwargs
 
     async def fake_run_alert_cycle(repo, messaging, risk_fn):
         user = UserContext(
@@ -76,9 +78,12 @@ def test_cycle_once_passes_history_and_personalization(monkeypatch):
         captured["result"] = await risk_fn(user)
         return 1
 
-    async def fake_get_risk(*, ctx, historical_temps=None, personalization=None):
-        captured["historical_temps"] = historical_temps
-        captured["personalization"] = personalization
+    new_hist = [{"date": date(2026, 7, 2), "temp": 34.0}]
+
+    async def fake_get_risk(*, ctx):
+        # score() now delegates entirely to get_risk's self-loading -- it is
+        # called with only ctx, no explicit historical_temps/personalization.
+        captured["get_risk_ctx"] = ctx
         return {
             "ccri": 50.0,
             "risk_level": "HIGH",
@@ -87,17 +92,60 @@ def test_cycle_once_passes_history_and_personalization(monkeypatch):
             "consecutive_nights": 3,
             "alert_message": "x",
             "as_of": "2026-07-03T00:00:00",
+            "weather": {"temp": 33.0, "humidity": 80.0},
+            "base_aqi": 90.0,
+            "rds_historical_temps": new_hist,
         }
 
     monkeypatch.setattr(scheduler, "build_repo", lambda: object())
     monkeypatch.setattr(scheduler, "build_messaging", lambda: object())
     monkeypatch.setattr(scheduler, "build_rds_repo", lambda: FakeRDSRepo())
-    monkeypatch.setattr(scheduler, "build_checkin_repo", lambda: FakeCheckinRepo())
+    monkeypatch.setattr(scheduler, "build_risk_eval_repo", lambda: FakeRiskEvalRepo())
     monkeypatch.setattr(scheduler, "run_alert_cycle", fake_run_alert_cycle)
     monkeypatch.setattr(scheduler, "get_risk", fake_get_risk)
 
     out = asyncio.run(scheduler._cycle_once())
 
     assert out == 1
-    assert captured["historical_temps"] == [{"date": date(2026, 7, 1), "temp": 33.0}]
-    assert captured["personalization"] is not None
+    # score() delegates self-loading to get_risk, no manual history/personalization
+    assert captured["get_risk_ctx"].user_id == "+911"
+    # risk evaluation is recorded from the result
+    assert captured["eval_user_id"] == "+911"
+    assert captured["eval_kwargs"]["rds_mid"] == 40.0
+    assert captured["eval_kwargs"]["ccri"] == 50.0
+    assert captured["eval_kwargs"]["outdoor_temp"] == 33.0
+    # updated RDS state is persisted for the next cycle
+    assert captured["saved_user_id"] == "+911"
+    assert captured["saved_temps"] == new_hist
+
+
+def test_cycle_once_skips_persistence_on_error(monkeypatch):
+    captured = {"save_called": False}
+
+    class FakeRDSRepo:
+        async def save(self, user_id, nighttime_temps):
+            captured["save_called"] = True
+
+    class FakeRiskEvalRepo:
+        async def add(self, user_id, **kwargs):
+            captured["add_called"] = True
+
+    async def fake_run_alert_cycle(repo, messaging, risk_fn):
+        user = UserContext(user_id="+911", phone="+911", metadata={"lat": 13.0, "lon": 80.0})
+        return await risk_fn(user)
+
+    async def fake_get_risk(*, ctx):
+        return {"error": "Risk data is temporarily unavailable."}
+
+    monkeypatch.setattr(scheduler, "build_repo", lambda: object())
+    monkeypatch.setattr(scheduler, "build_messaging", lambda: object())
+    monkeypatch.setattr(scheduler, "build_rds_repo", lambda: FakeRDSRepo())
+    monkeypatch.setattr(scheduler, "build_risk_eval_repo", lambda: FakeRiskEvalRepo())
+    monkeypatch.setattr(scheduler, "run_alert_cycle", fake_run_alert_cycle)
+    monkeypatch.setattr(scheduler, "get_risk", fake_get_risk)
+
+    out = asyncio.run(scheduler._cycle_once())
+
+    assert out == {"error": "Risk data is temporarily unavailable."}
+    assert captured["save_called"] is False
+    assert "add_called" not in captured

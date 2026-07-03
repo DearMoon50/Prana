@@ -6,8 +6,7 @@ from framework.context.user import UserContext
 from framework.tools.base import Tool
 from prana.config import OPENAQ_API_KEY, OPENWEATHER_API_KEY, RDS_NIGHTTIME_THRESHOLD
 from prana.prana_system import PRANASystem
-from prana.personalization import personalize_offset
-from prana.recovery.model import RecoveryModel
+from prana.personalization import personalize_offset, get_onboarding_prior
 
 
 async def get_risk(*, ctx: UserContext, historical_temps=None, personalization=None) -> dict:
@@ -23,10 +22,7 @@ async def get_risk(*, ctx: UserContext, historical_temps=None, personalization=N
             checkins = await build_checkin_repo().list_for_user(ctx.user_id, limit=30)
             if checkins:
                 onb = meta.get("onboarding") or {}
-                # Dummy system to resolve climate zone for the prior
-                dummy = PRANASystem(location_name=meta.get("location_name") or "default")
-                prior_mean = RecoveryModel.compute_onboarding_temp_offset(onb, climate_zone=dummy.climate_zone)
-                prior_sd = RecoveryModel.compute_band_width(onb)
+                prior_mean, prior_sd = get_onboarding_prior(onb, meta.get("location_name"))
                 post = personalize_offset(prior_mean, prior_sd, checkins, RDS_NIGHTTIME_THRESHOLD)
                 personalization = {"offset": post.mean, "band": post.sd, "n_checkins": post.n_checkins}
 
@@ -56,6 +52,9 @@ async def get_risk(*, ctx: UserContext, historical_temps=None, personalization=N
         "consecutive_nights": rds["consecutive_nights"],
         "alert_message": result["alert_message"],
         "as_of": ts.isoformat() if hasattr(ts, "isoformat") else ts,
+        "weather": result.get("weather"),
+        "base_aqi": result.get("base_aqi"),
+        "rds_historical_temps": system.rds_calculator.nighttime_temps,
     }
 
 

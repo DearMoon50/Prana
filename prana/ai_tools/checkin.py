@@ -68,8 +68,9 @@ async def record_checkin(*, ctx: UserContext, sleep_quality: str) -> dict:
                 openaq_api_key=OPENAQ_API_KEY,
                 onboarding_data=meta.get("onboarding"),
             )
-            forecast = system.data_fetcher.get_forecast(lat, lon)
-            conditions = system.rds_calculator.estimate_nighttime_conditions_from_forecast(
+            forecast = await asyncio.to_thread(system.data_fetcher.get_forecast, lat, lon)
+            conditions = await asyncio.to_thread(
+                system.rds_calculator.estimate_nighttime_conditions_from_forecast,
                 forecast
             )
             if conditions:

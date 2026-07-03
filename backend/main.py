@@ -25,7 +25,7 @@ from prana.bot.bootstrap import (  # noqa: E402
     build_repo, build_checkin_repo, build_rds_repo, build_risk_eval_repo,
     build_household_repo, settings,
 )
-from prana.personalization import personalize_offset  # noqa: E402
+from prana.personalization import personalize_offset, get_onboarding_prior  # noqa: E402
 from framework.context.user import UserContext  # noqa: E402
 from prana.config import WHATSAPP_BOT_NUMBER  # noqa: E402
 from enum import Enum
@@ -245,8 +245,7 @@ async def calculate_current_risk(payload: RiskRequest) -> RiskResponse:
 
         checkins = await checkin_repo.list_for_user(payload.user_id, limit=30)
         if checkins:
-            prior_mean = _onboarding_prior_mean(onb_data, loc_name)
-            prior_sd = _onboarding_prior_sd(onb_data)
+            prior_mean, prior_sd = get_onboarding_prior(onb_data, loc_name)
             post = personalize_offset(prior_mean, prior_sd, checkins, RDS_NIGHTTIME_THRESHOLD)
             personalization = {"offset": post.mean, "band": post.sd, "n_checkins": post.n_checkins}
 
@@ -323,22 +322,6 @@ async def register(payload: RegisterRequest) -> RegisterResponse:
         whatsapp_link=f"https://wa.me/{WHATSAPP_BOT_NUMBER}?text=PRANA%20START",
         sandbox_join_code=settings.whatsapp_sandbox_join_code,
     )
-
-
-def _onboarding_prior_mean(onboarding_data, location_name=None) -> float:
-    """Prior mean for personalization = the onboarding-derived indoor offset."""
-    from prana.recovery.model import RecoveryModel
-    from prana.prana_system import PRANASystem
-
-    # Use PRANASystem's resolver to get the climate zone
-    dummy = PRANASystem(location_name=location_name or "default")
-    return RecoveryModel.compute_onboarding_temp_offset(onboarding_data, climate_zone=dummy.climate_zone)
-
-
-def _onboarding_prior_sd(onboarding_data) -> float:
-    """Prior SD for personalization = the onboarding offset band half-width."""
-    from prana.recovery.model import RecoveryModel
-    return RecoveryModel.compute_band_width(onboarding_data)
 
 
 def _run_prana_pipeline(payload: RiskRequest, personalization=None, historical_temps=None):

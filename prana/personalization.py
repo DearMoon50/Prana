@@ -144,3 +144,24 @@ def personalize_offset(prior_mean: float, prior_sd: float, checkins: list[dict],
         if obs is not None:
             observations.append(obs)
     return update_posterior(prior_mean, prior_sd, observations)
+
+def get_onboarding_prior(onboarding_data: dict, location_name: str | None = None) -> tuple[float, float]:
+    """
+    Resolve the mid-offset mean and band half-width for a user's onboarding profile.
+
+    This resolves the climate zone via PRANASystem and uses RecoveryModel
+    to derive the physical priors.
+
+    Returns:
+        tuple (mean, sd) in degC.
+    """
+    from prana.recovery.model import RecoveryModel
+    from prana.prana_system import PRANASystem
+
+    # Dummy system to resolve climate zone for the prior
+    dummy = PRANASystem(location_name=location_name or "default")
+    mean = RecoveryModel.compute_onboarding_temp_offset(
+        onboarding_data or {}, climate_zone=dummy.climate_zone
+    )
+    sd = RecoveryModel.compute_band_width(onboarding_data or {})
+    return mean, sd

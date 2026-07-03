@@ -1,11 +1,3 @@
-"""Background scheduler that periodically runs the proactive alert cycle.
-
-Uses a plain asyncio loop (no extra dependency): start it from the FastAPI
-lifespan, and it runs run_alert_cycle() every UPDATE_INTERVAL hours until the
-app shuts down. The risk function is the same scoring path the agent's
-get_risk tool uses, run in a thread so its blocking network calls don't stall
-the event loop.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -14,12 +6,9 @@ import logging
 from prana.alerts import run_alert_cycle
 from prana.ai_tools.risk import get_risk
 from prana.bot.bootstrap import (
-    build_messaging, build_repo, build_checkin_repo, build_rds_repo,
+    build_messaging, build_repo, build_rds_repo, build_risk_eval_repo,
 )
-from prana.config import UPDATE_INTERVAL, RDS_NIGHTTIME_THRESHOLD
-from prana.personalization import personalize_offset
-from prana.recovery.model import RecoveryModel
-from prana.prana_system import PRANASystem
+from prana.config import UPDATE_INTERVAL
 
 logger = logging.getLogger(__name__)
 
@@ -28,30 +17,26 @@ async def _cycle_once() -> int:
     repo = build_repo()
     messaging = build_messaging()
     rds_repo = build_rds_repo()
-    checkin_repo = build_checkin_repo()
+    risk_eval_repo = build_risk_eval_repo()
 
     async def score(user):
-        historical_temps = await rds_repo.load(user.user_id)
-        personalization = None
-        checkins = await checkin_repo.list_for_user(user.user_id, limit=30)
-        if checkins:
-            onb = user.metadata.get("onboarding") or {}
-            dummy = PRANASystem(location_name=user.metadata.get("location_name") or "default")
-            prior_mean = RecoveryModel.compute_onboarding_temp_offset(
-                onb, climate_zone=dummy.climate_zone
+        # We use get_risk which handles the calculation + self-loading of history.
+        result = await get_risk(ctx=user)
+        if "error" not in result:
+            # Record the evaluation in history
+            await risk_eval_repo.add(
+                user.user_id,
+                outdoor_temp=result.get("weather", {}).get("temp"),
+                outdoor_humidity=result.get("weather", {}).get("humidity"),
+                base_aqi=result.get("base_aqi"),
+                ndt=result.get("ndt"),
+                rds_mid=result.get("rds_mid"),
+                ccri=result.get("ccri"),
             )
-            prior_sd = RecoveryModel.compute_band_width(onb)
-            post = personalize_offset(prior_mean, prior_sd, checkins, RDS_NIGHTTIME_THRESHOLD)
-            personalization = {
-                "offset": post.mean,
-                "band": post.sd,
-                "n_checkins": post.n_checkins,
-            }
-        return await get_risk(
-            ctx=user,
-            historical_temps=historical_temps,
-            personalization=personalization,
-        )
+            # Persist updated RDS state so next cycle/app-open sees the new data
+            if result.get("rds_historical_temps"):
+                await rds_repo.save(user.user_id, result["rds_historical_temps"])
+        return result
 
     return await run_alert_cycle(repo, messaging, score)
 
