@@ -35,6 +35,7 @@ def accumulate_debt(nights) -> float:
             night.get('effective_temp'),
             humidity=night.get('humidity'),
             hot_climate=night.get('hot_climate', False),
+            age_group=night.get('age_group'),
         )
         # Only a genuinely cool (recovering) night pays down debt, at a fixed
         # rate independent of the loss curve; a hot night clears nothing.

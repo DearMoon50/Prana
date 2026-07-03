@@ -7,7 +7,13 @@ in by nudging the effective temperature upward via the wet-bulb signal, so humid
 nights are not underrated.
 """
 import math
-from prana.config import SLEEP_LOSS_ANCHORS, HOT_CLIMATE_SLEEP_MULTIPLIER, RDS_USE_WET_BULB
+from prana.config import (
+    SLEEP_LOSS_ANCHORS,
+    HOT_CLIMATE_SLEEP_MULTIPLIER,
+    RDS_USE_WET_BULB,
+    AGE_GROUP_SLEEP_LOSS_MULTIPLIER,
+    AGE_GROUP_DEFAULT,
+)
 from prana.recovery.wetbulb import wet_bulb_stull
 
 
@@ -40,7 +46,7 @@ def _humidity_adjusted_temp(effective_temp, humidity) -> float:
     return max(effective_temp, wet_equiv)
 
 
-def minutes_lost(effective_temp, humidity=None, hot_climate=False) -> float:
+def minutes_lost(effective_temp, humidity=None, hot_climate=False, age_group=None) -> float:
     """Minutes of sleep lost for one night at the given effective indoor temp."""
     if effective_temp is None or not math.isfinite(float(effective_temp)):
         return 0.0
@@ -48,4 +54,6 @@ def minutes_lost(effective_temp, humidity=None, hot_climate=False) -> float:
     minutes = _interp_anchor(t)
     if hot_climate:
         minutes *= HOT_CLIMATE_SLEEP_MULTIPLIER
+    age_key = age_group if age_group in AGE_GROUP_SLEEP_LOSS_MULTIPLIER else AGE_GROUP_DEFAULT
+    minutes *= AGE_GROUP_SLEEP_LOSS_MULTIPLIER[age_key]
     return max(0.0, minutes)

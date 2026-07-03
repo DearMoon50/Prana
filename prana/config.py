@@ -136,6 +136,38 @@ SLEEP_LOSS_ANCHORS = [
     (45.0, 60.0),
 ]
 
+# Age-group sleep-loss sensitivity multiplier, applied in minutes_lost().
+# Independent of HOT_CLIMATE_SLEEP_MULTIPLIER above (that is a separate,
+# still-unused knob for Minor's low-income finding; do not conflate the two).
+#
+# Tier A (older_adult): Wolf/Cottle/Fisher/Vecellio/Kenney 2023 (Commun Earth
+# Environ 4:486) measured older adults' uncompensable-heat wet-bulb threshold
+# at ~28.5C, vs ~31-32C for young adults -- roughly 2.5-3.5C lower. Read as a
+# ~3C leftward shift of the whole dose-response curve: an older adult at a
+# given temperature should lose sleep at roughly the rate an adult loses it
+# ~3C hotter. Anchored at the curve's own reference point (Minor-2022's 30C
+# headline anchor, 14 min): adult(30C)=14, adult(33C)=22, so the multiplier
+# that reproduces a 3C-hotter reading at 30C is 22/14 = 1.571..., rounded to
+# 1.6 (conservative rounding toward the upper end of the measured 2.5-3.5C
+# range). This is a scalar approximation of a curve shift, not a re-fit of
+# the anchors themselves.
+#
+# Tier B (infant/child): direction-grounded, not independently fitted --
+# infant thermoregulatory immaturity and elevated heat morbidity/mortality
+# risk (IJERPH 2025 22(8):1265; IJERPH 2022 19(15):9109). Child kept modest:
+# literature notes thermoregulation is not inherently deficient in children
+# except in specific vulnerable subgroups (e.g. preterm infants), so child
+# sits closer to the adult baseline than infant. Both magnitudes are
+# calibrated engineering choices, not fitted to a pediatric heat-sleep
+# dataset.
+AGE_GROUP_SLEEP_LOSS_MULTIPLIER = {
+    "infant": 1.3,        # 0-1 yr, Tier B (direction-grounded, calibrated magnitude)
+    "child": 1.15,        # 2-12 yr, Tier B, kept modest per literature caveat above
+    "adult": 1.0,         # 13-64 yr, baseline
+    "older_adult": 1.6,   # 65+, Tier A (derived above from Wolf et al. 2023 threshold shift)
+}
+AGE_GROUP_DEFAULT = "adult"
+
 # Debt ledger dynamics (minutes).
 RECOVERY_DEBT_CAP_MIN = 240          # ~4h max carried debt; replaces the old 100 cap
 RECOVERY_PER_COOL_NIGHT_MIN = 45     # minutes of debt cleared by one recovering night (see RECOVERY_NIGHT_LOSS_THRESHOLD_MIN)

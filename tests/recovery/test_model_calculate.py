@@ -64,3 +64,19 @@ def test_differentiator_hot_vs_cool_history_same_tonight():
     hot = RecoveryModel(); _seed(hot, [35, 36, 34, 30])
     cool = RecoveryModel(); _seed(cool, [29, 28, 29, 30])
     assert hot.calculate_rds()["debt_minutes_mid"] > cool.calculate_rds()["debt_minutes_mid"]
+
+
+def test_older_adult_age_group_produces_higher_debt_than_adult():
+    adult = RecoveryModel(age_group="adult")
+    older = RecoveryModel(age_group="older_adult")
+    _seed(adult, [33, 34, 33])
+    _seed(older, [33, 34, 33])
+    assert older.calculate_rds()["debt_minutes_mid"] > adult.calculate_rds()["debt_minutes_mid"]
+
+
+def test_default_age_group_is_adult():
+    default = RecoveryModel()
+    adult = RecoveryModel(age_group="adult")
+    _seed(default, [33, 34, 33])
+    _seed(adult, [33, 34, 33])
+    assert default.calculate_rds()["debt_minutes_mid"] == adult.calculate_rds()["debt_minutes_mid"]

@@ -49,3 +49,39 @@ def test_hot_climate_multiplier():
 def test_bad_input_zero():
     assert minutes_lost(float("nan")) == 0.0
     assert minutes_lost(float("inf")) == 0.0
+
+
+def test_age_group_adult_baseline_unchanged():
+    # Default age_group must match pre-age-sensitivity behavior exactly.
+    assert minutes_lost(30.0) == minutes_lost(30.0, age_group="adult")
+    assert minutes_lost(30.0, age_group="adult") == 14.0
+
+
+def test_age_group_older_adult_loses_more_than_adult():
+    adult = minutes_lost(30.0, age_group="adult")
+    older = minutes_lost(30.0, age_group="older_adult")
+    assert older > adult
+
+
+def test_age_group_ordering_infant_child_adult():
+    infant = minutes_lost(30.0, age_group="infant")
+    child = minutes_lost(30.0, age_group="child")
+    adult = minutes_lost(30.0, age_group="adult")
+    assert infant > child > adult
+
+
+def test_age_group_unknown_defaults_to_adult():
+    adult = minutes_lost(30.0, age_group="adult")
+    assert minutes_lost(30.0, age_group="unknown_value") == adult
+    assert minutes_lost(30.0, age_group=None) == adult
+    assert minutes_lost(30.0, age_group="") == adult
+
+
+def test_age_group_applied_after_hot_climate_multiplier():
+    # Both multipliers should compose: hot_climate then age_group, on the
+    # same interpolated base value (order documented in dose_response.py).
+    from prana.config import HOT_CLIMATE_SLEEP_MULTIPLIER, AGE_GROUP_SLEEP_LOSS_MULTIPLIER
+    base = _interp_anchor(30.0)
+    expected = base * HOT_CLIMATE_SLEEP_MULTIPLIER * AGE_GROUP_SLEEP_LOSS_MULTIPLIER["older_adult"]
+    actual = minutes_lost(30.0, hot_climate=True, age_group="older_adult")
+    assert abs(actual - expected) < 1e-9

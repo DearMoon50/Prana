@@ -39,3 +39,23 @@ def test_classify_tier():
     assert m.classify_tier(45.0) == "MODERATE"
     assert m.classify_tier(120.0) == "HIGH"
     assert m.classify_tier(200.0) == "SEVERE"
+
+
+def test_age_group_constructor_defaults_to_adult():
+    m = RecoveryModel()
+    assert m.age_group == "adult"
+
+
+def test_age_group_constructor_accepts_explicit_value():
+    m = RecoveryModel(age_group="older_adult")
+    assert m.age_group == "older_adult"
+
+
+def test_age_group_invalid_values_stored_as_is_but_behave_as_adult():
+    # Storage doesn't normalize; behavior normalizes at minutes_lost() call time.
+    for bad in (None, "", "invalid_value"):
+        m = RecoveryModel(age_group=bad)
+        m.add_night_temperature(30.0)
+        adult = RecoveryModel(age_group="adult")
+        adult.add_night_temperature(30.0)
+        assert m.calculate_rds()["debt_minutes_mid"] == adult.calculate_rds()["debt_minutes_mid"]

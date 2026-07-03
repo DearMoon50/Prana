@@ -42,3 +42,18 @@ def test_debt_capped():
 
 def test_empty_is_zero():
     assert accumulate_debt([]) == 0.0
+
+
+def test_age_group_per_night_increases_debt():
+    adult_nights = [_night(30.0), _night(31.0)]
+    older_nights = [
+        {"effective_temp": 30.0, "humidity": None, "hot_climate": False, "age_group": "older_adult"},
+        {"effective_temp": 31.0, "humidity": None, "hot_climate": False, "age_group": "older_adult"},
+    ]
+    assert accumulate_debt(older_nights) > accumulate_debt(adult_nights)
+
+
+def test_night_without_age_group_key_defaults_to_adult():
+    # _night() helper never sets 'age_group' -- ledger must not KeyError on it.
+    debt = accumulate_debt([_night(30.0)])
+    assert abs(debt - 14.0) < 0.5

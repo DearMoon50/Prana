@@ -24,9 +24,10 @@ _log = get_logger("recovery.model")
 
 
 class RecoveryModel:
-    def __init__(self, onboarding_data=None):
+    def __init__(self, onboarding_data=None, age_group="adult"):
         self.nighttime_temps = []  # list of {'date', 'temp', 'humidity'?}
         self.onboarding_data = onboarding_data
+        self.age_group = age_group
 
     # --- offset helpers (delegated; preserve legacy staticmethod call sites) ---
     @staticmethod
@@ -105,6 +106,7 @@ class RecoveryModel:
                 'effective_temp': eff,
                 'humidity': night.get('humidity'),
                 'hot_climate': False,
+                'age_group': self.age_group,
             })
         return ledger.accumulate_debt(ledger_nights)
 
@@ -122,7 +124,7 @@ class RecoveryModel:
                     onb, outdoor_temp=night['temp'], climate_zone=climate_zone
                 )
             eff = indoor_climate.effective_indoor_temp(night['temp'], offset)
-            if minutes_lost(eff, humidity=night.get('humidity')) > 0:
+            if minutes_lost(eff, humidity=night.get('humidity'), age_group=self.age_group) > 0:
                 count += 1
             else:
                 break
