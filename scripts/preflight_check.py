@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from prana.config import *
-from prana.rds_calculator import RDSCalculator
+from prana.recovery.model import RecoveryModel
 from prana.prana_system import PRANASystem
 from backend.main import app, HomeProfile, RiskRequest
 
@@ -36,20 +36,20 @@ def section(title: str) -> None:
 def main() -> int:
     section("1. IMPORT CHAIN")
     check("prana.config imports", True)
-    check("prana.rds_calculator imports", True)
+    check("prana.recovery.model imports", True)
 
     section("2. CLIMATE-ZONE-AWARE PHYSICS (Simpson's Paradox Fix)")
     profile = {'roof_material': 'brick', 'floor_level': 'top'}
     # Dry zone: Top floor should be cooler (-1.02)
-    off_dry = RDSCalculator.compute_onboarding_temp_offset(profile, outdoor_temp=30.0, climate_zone="hot_dry")
+    off_dry = RecoveryModel.compute_onboarding_temp_offset(profile, outdoor_temp=30.0, climate_zone="hot_dry")
     check("Delhi (dry) top floor is COOLER", off_dry < 0, f"offset={off_dry}")
     
     # Humid zone: Top floor should be hotter (+0.92)
-    off_humid = RDSCalculator.compute_onboarding_temp_offset(profile, outdoor_temp=30.0, climate_zone="hot_humid")
+    off_humid = RecoveryModel.compute_onboarding_temp_offset(profile, outdoor_temp=30.0, climate_zone="hot_humid")
     check("Dhaka (humid) top floor is HOTTER", off_humid > 0, f"offset={off_humid}")
     
     # Defensive safety cap at 36C in dry zone
-    off_dry_36 = RDSCalculator.compute_onboarding_temp_offset(profile, outdoor_temp=36.0, climate_zone="hot_dry")
+    off_dry_36 = RecoveryModel.compute_onboarding_temp_offset(profile, outdoor_temp=36.0, climate_zone="hot_dry")
     check("Safety cap: Cooling disabled at 36C", off_dry_36 >= 0, f"offset={off_dry_36}")
 
     section("3. SYSTEM WIRING (City Lookup)")

@@ -89,7 +89,7 @@ class PRANASystem:
 
         # Step 2: Fetch weather forecast (include past days for RDS history)
         logger.info("Step 2: Fetching weather forecast...")
-        past_days = RDS_MAX_DAYS if not self.rds_calculator.nighttime_temps else 0
+        past_days = RECOVERY_WINDOW_NIGHTS if not self.rds_calculator.nighttime_temps else 0
         forecast = self.data_fetcher.get_forecast(lat, lon, hours=24, past_days=past_days)
         
         if not forecast:
