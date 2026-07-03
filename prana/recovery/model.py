@@ -12,10 +12,12 @@ from prana.config import (
     RECOVERY_TIER_HIGH_MIN,
     RECOVERY_TIER_SEVERE_MIN,
     RECOVERY_DEBT_CAP_MIN,
+    RECOVERY_PER_COOL_NIGHT_MIN,
 )
 from prana.recovery import indoor_climate
 from prana.recovery import ledger
 from prana.recovery.forecast import select_night_date
+from prana.recovery import forecast as _forecast
 from backend.logger import get_logger
 
 _log = get_logger("recovery.model")
@@ -171,3 +173,107 @@ class RecoveryModel:
             _log.debug("Recovery debt (low/mid/high min): %.1f / %.1f / %.1f | tier=%s",
                        debt_low, debt_mid, debt_high, result['tier'])
         return result
+
+    def apply_sleep_checkin_adjustment(self, rds_dict, checkin=None):
+        """Bounded, deterministic check-in nudge (minutes).
+
+        A check-in shifts debt by at most +/- RECOVERY_PER_COOL_NIGHT_MIN, so a
+        self-report can refine but never out-signal the weather-driven debt.
+        """
+        if not checkin:
+            return rds_dict, {
+                'applied': False, 'delta': 0.0, 'reason': 'no_checkin',
+                'adjusted_rds_mid': rds_dict['rds_mid'],
+            }
+
+        env = str(checkin.get('sleep_environment', '')).lower()
+        quality = str(checkin.get('sleep_quality', '')).lower()
+        cooling_issue = bool(checkin.get('cooling_issue', False))
+        power_issue = bool(checkin.get('power_issue', False))
+
+        delta = 0.0
+        reasons = []
+        if env in {'comfortable', 'cool_enough'} or quality == 'good':
+            delta -= 20.0
+            reasons.append('comfortable_sleep_environment')
+        elif env in {'warm_manageable', 'warm'} or quality == 'moderate':
+            delta += 8.0
+            reasons.append('warm_but_manageable')
+        elif env in {'too_hot', 'cooling_unavailable'} or quality == 'poor':
+            delta += 25.0
+            reasons.append('poor_sleep_environment')
+        if cooling_issue:
+            delta += 10.0
+            reasons.append('cooling_issue')
+        if power_issue:
+            delta += 15.0
+            reasons.append('power_issue')
+
+        # Clamp the total nudge to one night's recovery budget.
+        budget = RECOVERY_PER_COOL_NIGHT_MIN
+        delta = max(-budget, min(budget, delta))
+
+        def adj(d):
+            return max(0.0, min(RECOVERY_DEBT_CAP_MIN, d + delta))
+
+        dmid = adj(rds_dict['debt_minutes_mid'])
+        dlow = adj(rds_dict['debt_minutes_low'])
+        dhigh = adj(rds_dict['debt_minutes_high'])
+
+        def to_scale(d):
+            return round(min(100.0, d / RECOVERY_DEBT_CAP_MIN * 100.0), 1)
+
+        adjusted = {
+            'rds_low': to_scale(dlow), 'rds_mid': to_scale(dmid), 'rds_high': to_scale(dhigh),
+            'consecutive_nights': rds_dict['consecutive_nights'],
+            'personalized': rds_dict.get('personalized', False),
+            'debt_minutes_low': round(dlow, 1), 'debt_minutes_mid': round(dmid, 1),
+            'debt_minutes_high': round(dhigh, 1),
+            'tier': self.classify_tier(dmid),
+        }
+        return adjusted, {
+            'applied': True, 'delta': round(delta, 1),
+            'reason': ','.join(reasons) if reasons else 'checkin_no_score_change',
+            'adjusted_rds_mid': adjusted['rds_mid'],
+            'raw_rds_mid': round(rds_dict['rds_mid'], 1),
+        }
+
+    def estimate_recovery_confidence(self, checkin=None):
+        if checkin:
+            return 'HIGH'
+        if len(self.nighttime_temps) >= 3:
+            return 'MEDIUM'
+        return 'LOW'
+
+    def get_rds_message(self, rds_dict, outdoor_temp=None):
+        """Human-readable recovery-debt message (minutes) + color code."""
+        if not self.nighttime_temps:
+            return "Recovery data unavailable", "UNKNOWN"
+        last_temp = self.nighttime_temps[0]['temp'] if self.nighttime_temps else outdoor_temp
+        if last_temp is None:
+            return "Recovery data unavailable", "UNKNOWN"
+
+        debt = rds_dict['debt_minutes_mid']
+        tier = rds_dict.get('tier') or self.classify_tier(debt)
+        consecutive = rds_dict['consecutive_nights']
+        color = {"LOW": "GREEN", "MODERATE": "YELLOW", "HIGH": "ORANGE", "SEVERE": "RED"}[tier]
+
+        if debt <= 0:
+            return (f"Recovery on track (no sleep debt; last night {last_temp:.1f}C)", color)
+        band = ""
+        if rds_dict['debt_minutes_high'] - rds_dict['debt_minutes_low'] > 15:
+            band = f" (range {rds_dict['debt_minutes_low']:.0f}-{rds_dict['debt_minutes_high']:.0f} min)"
+        if consecutive >= 3:
+            return (f"Recovery debt: ~{debt:.0f} min of sleep lost over {consecutive} hot "
+                    f"nights{band} - {tier}", color)
+        if consecutive > 0:
+            return (f"Recovery debt: ~{debt:.0f} min of lost sleep from {consecutive} hot "
+                    f"night(s){band} - {tier}", color)
+        return (f"Recovery debt: ~{debt:.0f} min{band} - {tier}", color)
+
+    def estimate_nighttime_temp_from_forecast(self, weather_forecast):
+        result = _forecast.estimate_nighttime_conditions_from_forecast(weather_forecast)
+        return result['temp'] if result else None
+
+    def estimate_nighttime_conditions_from_forecast(self, weather_forecast):
+        return _forecast.estimate_nighttime_conditions_from_forecast(weather_forecast)
