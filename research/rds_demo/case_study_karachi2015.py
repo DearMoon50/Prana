@@ -1,4 +1,4 @@
-"""Face-validation case study: RDS on the real Karachi June 2015 heatwave.
+"""Face-validation case study: the sleep-debt ledger on the real Karachi June 2015 heatwave.
 
 The Karachi 2015 heatwave killed ~1,200 people. It was a HUMID coastal event —
 nights stayed 28-32 C at 77-92% RH, so nighttime recovery failed through the
@@ -23,7 +23,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from pathlib import Path
 
-from prana.rds_calculator import RDSCalculator
+from prana.recovery.model import RecoveryModel
 
 _REPORT = Path(__file__).parent / "RDS_CASE_STUDY_KARACHI2015.md"
 
@@ -45,7 +45,7 @@ def _naive_verdict(out_min: float) -> str:
 
 def run(nights=KARACHI_2015) -> dict:
     today = date.today()
-    calc = RDSCalculator(onboarding_data=TARGET_HOME)
+    calc = RecoveryModel(onboarding_data=TARGET_HOME)
     rows = []
     naive_fine = 0
     for i, (label, out_min, rh) in enumerate(nights):
@@ -58,33 +58,33 @@ def run(nights=KARACHI_2015) -> dict:
         naive_fine += (naive == "FINE")
         rows.append({
             "night": label, "out_min": out_min, "rh": rh, "naive": naive,
-            "rds_mid": r["rds_mid"], "tier": calc._classify_rds_tier(r["rds_mid"]),
-            "consec": r["consecutive_nights"],
+            "rds_mid": r["rds_mid"], "debt_mid": r["debt_minutes_mid"],
+            "tier": r["tier"], "consec": r["consecutive_nights"],
         })
-    peak = max(rows, key=lambda x: x["rds_mid"])
+    peak = max(rows, key=lambda x: x["debt_mid"])
     return {"rows": rows, "peak": peak, "naive_fine": naive_fine, "n": len(nights)}
 
 
 def _report(res: dict) -> str:
     L = [
-        "# RDS Case Study — Karachi June 2015 Heatwave (face validation)",
+        "# Sleep-Debt Ledger Case Study — Karachi June 2015 Heatwave (face validation)",
         "",
         "The Karachi 2015 heatwave killed ~1,200 people. It was a **humid coastal** "
         "event: nights stayed hot AND humid, so nighttime recovery failed via the "
-        "wet-bulb pathway — exactly what RDS is built to catch. We replay the real "
-        "nightly data for PRANA's target user (a **top-floor low-income home**, which "
-        "runs hotter indoors).",
+        "wet-bulb pathway — exactly what the ledger is built to catch. We replay the "
+        "real nightly data for PRANA's target user (a **top-floor low-income home**, "
+        "which runs hotter indoors).",
         "",
         "Data: Open-Meteo historical archive (hourly 2 m temp + RH, nighttime "
         "22:00-06:00 minimum). This is **face validation on a real event, not "
         "statistical proof.**",
         "",
-        "| night | outdoor min | RH | naive dry-bulb (tonight-only) | RDS (mid) | tier |",
+        "| night | outdoor min | RH | naive dry-bulb (tonight-only) | debt (min) | tier |",
         "|---|---|---|---|---|---|",
     ]
     for x in res["rows"]:
         L.append(f"| {x['night']} | {x['out_min']:.1f} °C | {x['rh']}% | "
-                 f"{x['naive']} | {x['rds_mid']:.1f} | {x['tier']} |")
+                 f"{x['naive']} | {x['debt_mid']:.0f} | {x['tier']} |")
     peak = res["peak"]
     L += [
         "",
@@ -92,20 +92,22 @@ def _report(res: dict) -> str:
         "",
         f"- A **naive tonight-only dry-bulb** forecast calls the night **FINE on "
         f"{res['naive_fine']} of {res['n']} nights** — including the last night, when "
-        f"RDS has already climbed to its peak.",
-        f"- **RDS accumulates recovery debt** across the humid nights, reaching "
-        f"**{peak['rds_mid']:.1f} ({peak['tier']})** by {peak['night']} — flagging "
+        f"the ledger has already climbed to its peak.",
+        f"- **The ledger accumulates sleep debt** across the humid nights, reaching "
+        f"**{peak['debt_mid']:.0f} min ({peak['tier']})** by {peak['night']} — flagging "
         f"impaired recovery a single-night view misses.",
         "- The signal comes from the **wet-bulb pathway** (high humidity) plus "
-        "**multi-night compounding** — RDS's two distinctive mechanisms, on real data.",
+        "**multi-night ledger accumulation** — the model's two distinctive "
+        "mechanisms, on real data.",
         "",
         "## Honest limits",
         "",
         "- Uses outdoor archive data + a **modeled indoor offset** (top-floor home), "
         "not measured bedroom temperature.",
         "- Daily nighttime minimum is a proxy for the sleeping-hours low.",
-        "- RDS peaks at MODERATE, not CRITICAL — it is a calibrated, **non-alarmist** "
-        "signal, not a mortality predictor. This is face validity, not proof.",
+        f"- Debt peaks at {peak['tier']}, not SEVERE-and-maxed — it is a calibrated, "
+        "**non-alarmist** signal, not a mortality predictor. This is face validity, "
+        "not proof.",
         "",
     ]
     return "\n".join(L)
@@ -116,12 +118,12 @@ def main(refetch: bool = False) -> None:
     if refetch:
         nights = _refetch()
     res = run(nights)
-    print(f"{'night':8}{'out-min':>9}{'RH':>5}{'naive':>7}{'RDS_mid':>9}{'tier':>10}")
+    print(f"{'night':8}{'out-min':>9}{'RH':>5}{'naive':>7}{'debt_min':>9}{'tier':>10}")
     for x in res["rows"]:
         print(f"{x['night']:8}{x['out_min']:8.1f}C{x['rh']:>4}%{x['naive']:>7}"
-              f"{x['rds_mid']:8.1f} {x['tier']:>9}")
+              f"{x['debt_mid']:8.0f} {x['tier']:>9}")
     print(f"\nNaive 'FINE' on {res['naive_fine']}/{res['n']} nights; "
-          f"RDS peak {res['peak']['rds_mid']:.1f} ({res['peak']['tier']}).")
+          f"ledger peak {res['peak']['debt_mid']:.0f} min ({res['peak']['tier']}).")
     _REPORT.write_text(_report(res), encoding="utf-8")
     print(f"Report written to {_REPORT}")
 

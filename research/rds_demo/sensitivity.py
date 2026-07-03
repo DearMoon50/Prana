@@ -1,20 +1,24 @@
-"""Threshold robustness (sensitivity) analysis for RDS.
+"""Threshold robustness (sensitivity) analysis for the sleep-debt ledger.
 
-The point: RDS's exact constants (32C threshold, 0.6 decay, 4-night window,
-10 pts/degC slope) were adopted/chosen, not point-derived. This script defends
-them by showing the model's *conclusion* is robust to them — i.e. varying each
-constant across its plausible range does NOT change what RDS decides.
+The point: the ledger's exact constants (RECOVERY_PER_COOL_NIGHT_MIN=45,
+RECOVERY_NIGHT_LOSS_THRESHOLD_MIN=5, the Minor-2022 dose-response anchors) were
+adopted/chosen, not point-derived. This script defends them by showing the
+model's *conclusion* is robust to them -- i.e. varying the recovery-rate
+constants across their plausible range does NOT change what the ledger decides.
 
-Core test = the discrimination claim (why RDS exists): two households with an
-identical COOL night tonight but different histories. A tonight-only forecast
-treats them identically. Does RDS keep separating them across the whole grid?
+Core test = the discrimination claim (why the ledger exists): two households
+with an identical COOL night tonight but different histories. A tonight-only
+forecast treats them identically. Does the ledger keep separating them across
+the whole grid?
 """
 from __future__ import annotations
 
+import importlib
 from datetime import date, timedelta
 
-import prana.rds_calculator as rc
-from prana.rds_calculator import RDSCalculator
+from prana import config
+from prana.recovery import ledger as ledger_mod
+from prana.recovery.model import RecoveryModel
 
 # Two households, identical cool tonight (30C), opposite histories.
 _TODAY = date.today()
@@ -22,47 +26,50 @@ _HOT_HISTORY = [(3, 35.0), (2, 36.0), (1, 34.0), (0, 30.0)]
 _COOL_HISTORY = [(3, 29.0), (2, 28.0), (1, 29.0), (0, 30.0)]
 
 
-def _rds_mid(nights, threshold, decay):
-    """Compute rds_mid with monkeypatched threshold + decay constants."""
-    old_t, old_d = rc.RDS_NIGHTTIME_THRESHOLD, rc.RDS_DECAY_FACTOR
-    rc.RDS_NIGHTTIME_THRESHOLD = threshold
-    rc.RDS_DECAY_FACTOR = decay
+def _debt_mid(nights, per_cool_night, loss_threshold):
+    """Compute debt_minutes_mid with monkeypatched ledger recovery constants."""
+    old_per = config.RECOVERY_PER_COOL_NIGHT_MIN
+    old_threshold = config.RECOVERY_NIGHT_LOSS_THRESHOLD_MIN
+    config.RECOVERY_PER_COOL_NIGHT_MIN = per_cool_night
+    config.RECOVERY_NIGHT_LOSS_THRESHOLD_MIN = loss_threshold
+    importlib.reload(ledger_mod)  # ledger.py imports these constants at module load
     try:
-        c = RDSCalculator()
-        for da, t in nights:
-            c.add_night_temperature(t, _TODAY - timedelta(days=da))
-        # Disable wet-bulb here so we isolate the dry-bulb threshold under test.
-        old_wb = rc.RDS_USE_WET_BULB
-        rc.RDS_USE_WET_BULB = False
-        try:
-            return c.calculate_rds()["rds_mid"]
-        finally:
-            rc.RDS_USE_WET_BULB = old_wb
+        m = RecoveryModel()
+        for days_ago, temp in nights:
+            m.add_night_temperature(temp, _TODAY - timedelta(days=days_ago))
+        return m.calculate_rds()["debt_minutes_mid"]
     finally:
-        rc.RDS_NIGHTTIME_THRESHOLD = old_t
-        rc.RDS_DECAY_FACTOR = old_d
+        config.RECOVERY_PER_COOL_NIGHT_MIN = old_per
+        config.RECOVERY_NIGHT_LOSS_THRESHOLD_MIN = old_threshold
+        importlib.reload(ledger_mod)
 
 
 def run() -> dict:
-    thresholds = [30.0, 31.0, 32.0, 33.0, 34.0]
-    decays = [0.4, 0.5, 0.6, 0.7, 0.8]
+    per_cool_night_values = [30.0, 35.0, 40.0, 45.0, 50.0]
+    # RECOVERY_NIGHT_LOSS_THRESHOLD_MIN is compared against minutes_lost() for
+    # that night (default 5). Every night in both histories loses 9-35 min
+    # (29C already loses 11.5, see dose_response anchors), so a threshold below
+    # ~10 never lets ANY night recover in this scenario -- that's why a narrow
+    # 3-7 sweep looked flat. Widen the range enough to cross into "some nights
+    # now count as recovering" territory, so the sweep is actually exercised.
+    loss_threshold_values = [5.0, 10.0, 15.0, 20.0, 25.0]
 
     print("=" * 70)
-    print("RDS THRESHOLD ROBUSTNESS — discrimination test")
+    print("SLEEP-DEBT LEDGER ROBUSTNESS -- discrimination test")
     print("Two households, both cool tonight (30C). A forecast calls both 'fine'.")
-    print("Cell = RDS(hot-history) - RDS(cool-history). Positive = RDS still")
-    print("separates them (the conclusion holds).")
+    print("Cell = debt_mid(hot-history) - debt_mid(cool-history), in minutes.")
+    print("Positive = the ledger still separates them (the conclusion holds).")
     print("=" * 70)
-    header = "decay\\thr  " + "".join(f"{t:>8.0f}C" for t in thresholds)
+    header = "thresh\\per " + "".join(f"{p:>8.0f}m" for p in per_cool_night_values)
     print(header)
     holds = 0
     total = 0
     min_gap = float("inf")
-    for d in decays:
-        row = [f"  {d:>4.1f}   "]
-        for t in thresholds:
-            hot = _rds_mid(_HOT_HISTORY, t, d)
-            cool = _rds_mid(_COOL_HISTORY, t, d)
+    for loss_threshold in loss_threshold_values:
+        row = [f"  {loss_threshold:>4.0f}m  "]
+        for per in per_cool_night_values:
+            hot = _debt_mid(_HOT_HISTORY, per, loss_threshold)
+            cool = _debt_mid(_COOL_HISTORY, per, loss_threshold)
             gap = hot - cool
             total += 1
             if gap > 0:
@@ -72,14 +79,17 @@ def run() -> dict:
         print("".join(row))
     print("-" * 70)
     print(f"Discrimination holds in {holds}/{total} cells "
-          f"(threshold 30-34C x decay 0.4-0.8).")
-    print(f"Smallest separation anywhere in the grid: {min_gap:.1f} points.")
+          f"(RECOVERY_PER_COOL_NIGHT_MIN 30-50min x RECOVERY_NIGHT_LOSS_THRESHOLD_MIN 5-25min).")
+    print(f"Smallest separation anywhere in the grid: {min_gap:.1f} minutes.")
     print()
-    print("Note on the other two constants:")
-    print("  - RFU slope (pts/degC) is a pure multiplier: it scales every RDS")
-    print("    equally, so it CANNOT change the ranking or which user is flagged.")
-    print("  - 4-night window: older nights are already <0.8^4=0.41 weighted;")
-    print("    extending it changes absolute RDS by a few points, not the order.")
+    print("Note on the dose-response anchors:")
+    print("  - The Minor-2022 anchor curve sets the SHAPE of per-night loss, not")
+    print("    whether hot nights cost more than cool ones -- it is monotonic by")
+    print("    construction (see tests/recovery/test_dose_response.py), so it")
+    print("    cannot flip which household is flagged.")
+    print("  - RECOVERY_DEBT_CAP_MIN (240min) only bounds the ceiling; neither")
+    print("    history in this test is anywhere near the cap, so it does not")
+    print("    affect this comparison.")
     return {"holds": holds, "total": total, "min_gap": min_gap}
 
 
