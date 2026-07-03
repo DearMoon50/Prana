@@ -48,7 +48,7 @@ class TestIssue1RDSUncertaintyBands(unittest.TestCase):
     
     def test_rds_low_less_than_mid_less_than_high_ac_top_floor(self):
         """RDS low <= mid <= high for AC + top floor"""
-        onboarding = {'ac': True, 'floor_level': 'top'}  # -3 + 1.5 = -1.5°C offset
+        onboarding = {'ac': True, 'floor_level': 'top'}  # AC now temp-dependent (ASHRAE curve); top-floor default offset is 0
         result = self.calculator.calculate_rds(onboarding_data=onboarding)
         
         self.assertLessEqual(result['rds_low'], result['rds_mid'])
