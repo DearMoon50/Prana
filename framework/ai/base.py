@@ -62,7 +62,7 @@ class LLMProvider(Protocol):
     name: str
     supports_native_tools: bool
 
-    def chat(
+    async def chat(
         self,
         messages: list[Message],
         *,

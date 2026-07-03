@@ -366,51 +366,25 @@ class DataFetcher:
             location_name = location.get('name', 'Unknown')
             logger.info("Found station: %s (ID: %s)", location_name, location_id)
 
-            location_detail_url = f"https://api.openaq.org/v3/locations/{location_id}"
-            loc_response = self._session.get(location_detail_url, headers=headers, timeout=10)
-            loc_response.raise_for_status()
-            loc_data = loc_response.json()
-
-            if not loc_data.get('results'):
-                return None
-
-            sensors = loc_data['results'][0].get('sensors', [])
-            if not sensors:
-                return None
+            # Get latest measurements for all sensors in one call (N+1 fix)
+            latest_url = f"https://api.openaq.org/v3/locations/{location_id}/latest"
+            latest_resp = self._session.get(latest_url, headers=headers, timeout=10)
+            latest_resp.raise_for_status()
+            latest_data = latest_resp.json()
 
             pollutants = {}
-
-            for sensor in sensors:
-                sensor_id = sensor['id']
-                param_name = sensor['parameter']['name'].lower()
-
-                sensor_measurements_url = f"https://api.openaq.org/v3/sensors/{sensor_id}/measurements"
-                s_params = {'limit': 1, 'order_by': 'datetime', 'sort_order': 'desc'}
-
-                try:
-                    sensor_response = self._session.get(
-                        sensor_measurements_url, headers=headers, params=s_params, timeout=5
-                    )
-                    if sensor_response.status_code != 200:
-                        continue
-
-                    sensor_data = sensor_response.json()
-                    if sensor_data.get('results'):
-                        measurement = sensor_data['results'][0]
-                        timestamp = measurement.get('datetime', {})
-                        if isinstance(timestamp, dict):
-                            timestamp = timestamp.get('utc', 'Unknown')
-
-                        pollutants[param_name] = {
-                            'value': measurement['value'],
-                            'unit': _normalize_unit(sensor['parameter']['units']),
-                            'timestamp': timestamp,
-                            'source': 'openaq',
-                            'averaging_window': 'instantaneous'
-                        }
-                except requests.exceptions.RequestException:
-                    logger.debug("Failed to fetch sensor %s data", sensor_id, exc_info=True)
-                    continue
+            for result in latest_data.get('results', []):
+                param_name = result['parameter']['name'].lower()
+                value = result['value']
+                unit = result['parameter']['units']
+                
+                pollutants[param_name] = {
+                    'value': value,
+                    'unit': _normalize_unit(unit),
+                    'timestamp': result.get('datetime', {}).get('utc', 'Unknown'),
+                    'source': 'openaq',
+                    'averaging_window': 'instantaneous'
+                }
 
             if pollutants:
                 logger.info("OpenAQ measurements: %s", ', '.join(pollutants.keys()))
@@ -558,7 +532,15 @@ class DataFetcher:
             elif unit == 'ppm':
                 co_ppm = co_value
             else:
-                co_ppm = co_value / 1150 if co_value > 100 else co_value
+                # Conservative fallback for unknown units:
+                # 1150 is the approx conversion from ug/m3 to ppm at 25C.
+                # If value is > 50, it is almost certainly ug/m3 or mg/m3.
+                if co_value > 50:
+                    co_ppm = co_value / 1150
+                    logger.warning("CO unit unknown ('%s'); assuming ug/m3 based on magnitude (%s)", unit, co_value)
+                else:
+                    co_ppm = co_value
+                    logger.debug("CO unit unknown ('%s'); assuming ppm based on magnitude (%s)", unit, co_value)
             co_aqi = self._calculate_co_aqi(co_ppm)
             pollutant_aqi['CO'] = co_aqi
             averaging_windows['CO'] = 'instantaneous'

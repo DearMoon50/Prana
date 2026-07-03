@@ -75,8 +75,11 @@ class SQLiteUserRepository:
                     pass  # column already exists (fresh DB or prior migration)
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
+        # Enable WAL mode for better concurrency (multiple readers, one writer)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         return conn
 
     @staticmethod
@@ -161,8 +164,11 @@ class SQLiteCheckinRepository:
             c.execute(_CHECKINS_SCHEMA)
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
+        # Enable WAL mode for better concurrency (multiple readers, one writer)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         return conn
 
     async def add(self, user_id: str, checkin_date: str, sleep_quality: str | None,
@@ -222,8 +228,11 @@ class SQLiteRDSStateRepository:
             c.execute(_RDS_STATES_SCHEMA)
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
+        # Enable WAL mode for better concurrency (multiple readers, one writer)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         return conn
 
     async def save(self, user_id: str, nighttime_temps: list) -> None:
@@ -279,8 +288,11 @@ class SQLiteRiskEvalRepository:
             c.execute(_RISK_EVALS_SCHEMA)
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
+        # Enable WAL mode for better concurrency (multiple readers, one writer)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         return conn
 
     async def add(self, user_id: str, *, outdoor_temp, outdoor_humidity,

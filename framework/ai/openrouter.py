@@ -19,8 +19,8 @@ class OpenRouterProvider:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
-    def chat(self, messages: list[Message], *, tools: list[ToolSchema] | None = None,
-             temperature: float = 0.2) -> ChatResponse:
+    async def chat(self, messages: list[Message], *, tools: list[ToolSchema] | None = None,
+                   temperature: float = 0.2) -> ChatResponse:
         if not self.api_key:
             raise ProviderError("OPENROUTER_API_KEY is not configured")
         payload: dict = {
@@ -37,9 +37,10 @@ class OpenRouterProvider:
             "X-Title": "PRANA",
         }
         try:
-            resp = httpx.post(f"{self.base_url}/chat/completions",
-                              headers=headers, json=payload, timeout=self.timeout)
-            resp.raise_for_status()
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(f"{self.base_url}/chat/completions",
+                                    headers=headers, json=payload, timeout=self.timeout)
+                resp.raise_for_status()
         except httpx.HTTPError as exc:
             raise ProviderError(f"OpenRouter request failed: {exc}") from exc
         return self._decode(resp.json())

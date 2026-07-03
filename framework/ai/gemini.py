@@ -20,20 +20,51 @@ class GeminiProvider:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
-    def chat(self, messages: list[Message], *, tools: list[ToolSchema] | None = None,
-             temperature: float = 0.2) -> ChatResponse:
+    async def chat(self, messages: list[Message], *, tools: list[ToolSchema] | None = None,
+                   temperature: float = 0.2) -> ChatResponse:
         if not self.api_key:
             raise ProviderError("GEMINI_API_KEY is not configured")
-        contents = [
-            {"role": _ROLE_MAP[m.role], "parts": [{"text": m.content}]} for m in messages
-        ]
+
+        contents = []
+        for m in messages:
+            if m.role == Role.TOOL:
+                # Gemini native functionResponse protocol:
+                contents.append({
+                    "role": "function",
+                    "parts": [{
+                        "functionResponse": {
+                            "name": m.name or "unknown",
+                            "response": {"result": m.content}
+                        }
+                    }]
+                })
+            else:
+                parts = []
+                if m.tool_calls:
+                    for tc in m.tool_calls:
+                        parts.append({
+                            "functionCall": {
+                                "name": tc.name,
+                                "args": tc.arguments
+                            }
+                        })
+                if m.content:
+                    parts.append({"text": m.content})
+                
+                contents.append({
+                    "role": _ROLE_MAP[m.role],
+                    "parts": parts
+                })
+
         payload: dict = {"contents": contents, "generationConfig": {"temperature": temperature}}
         if tools:
             payload["tools"] = [{"function_declarations": [t["function"] for t in tools]}]
+        
         url = f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}"
         try:
-            resp = httpx.post(url, json=payload, timeout=self.timeout)
-            resp.raise_for_status()
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(url, json=payload, timeout=self.timeout)
+                resp.raise_for_status()
         except httpx.HTTPError as exc:
             raise ProviderError(f"Gemini request failed: {exc}") from exc
         return self._decode(resp.json())

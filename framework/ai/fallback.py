@@ -18,13 +18,13 @@ class FallbackProvider:
         # when every provider in the chain uses native tools.
         return all(p.supports_native_tools for p in self.providers)
 
-    def chat(self, messages: list[Message], *, tools: list[ToolSchema] | None = None,
-             temperature: float = 0.2) -> ChatResponse:
+    async def chat(self, messages: list[Message], *, tools: list[ToolSchema] | None = None,
+                   temperature: float = 0.2) -> ChatResponse:
         errors = []
         for provider in self.providers:
             try:
                 # Each provider adapts `tools` to its own tool-calling style.
-                return provider.chat(messages, tools=tools, temperature=temperature)
+                return await provider.chat(messages, tools=tools, temperature=temperature)
             except Exception as exc:  # noqa: BLE001 - try next provider
                 errors.append(f"{provider.name}: {exc}")
         raise ProviderError("All providers failed: " + "; ".join(errors))
