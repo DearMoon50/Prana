@@ -25,6 +25,7 @@ class Message:
     content: str
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
+    name: str | None = None
 
 
 @dataclass

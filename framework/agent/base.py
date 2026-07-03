@@ -84,6 +84,7 @@ class Agent:
                         Role.TOOL,
                         content=f"<tool_result>{json.dumps(payload, default=str)}</tool_result>",
                         tool_call_id=call.id,
+                        name=call.name,
                     )
                 )
 

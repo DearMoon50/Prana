@@ -366,6 +366,18 @@ class DataFetcher:
             location_name = location.get('name', 'Unknown')
             logger.info("Found station: %s (ID: %s)", location_name, location_id)
 
+            # Fetch sensor metadata once for this location to map IDs to parameter names/units
+            # (Matches OpenAQ v3 spec: /latest results only contain sensorsId, not metadata)
+            sensors_url = f"https://api.openaq.org/v3/locations/{location_id}/sensors"
+            sensors_resp = self._session.get(sensors_url, headers=headers, timeout=10)
+            sensors_resp.raise_for_status()
+            
+            sensor_map = {}
+            for s in sensors_resp.json().get('results', []):
+                sid = s.get('id')
+                if sid:
+                    sensor_map[sid] = (s['parameter']['name'].lower(), s['parameter']['units'])
+
             # Get latest measurements for all sensors in one call (N+1 fix)
             latest_url = f"https://api.openaq.org/v3/locations/{location_id}/latest"
             latest_resp = self._session.get(latest_url, headers=headers, timeout=10)
@@ -374,9 +386,12 @@ class DataFetcher:
 
             pollutants = {}
             for result in latest_data.get('results', []):
-                param_name = result['parameter']['name'].lower()
+                sid = result.get('sensorsId')
+                if sid not in sensor_map:
+                    continue
+                
+                param_name, unit = sensor_map[sid]
                 value = result['value']
-                unit = result['parameter']['units']
                 
                 pollutants[param_name] = {
                     'value': value,
