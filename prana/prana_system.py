@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from prana.data_fetcher import DataFetcher
 from prana.ndt_calculator import NDTCalculator
 from prana.ha_aqi_calculator import HAAQICalculator
-from prana.rds_calculator import RDSCalculator
+from prana.recovery.model import RecoveryModel
 from prana.ccri_calculator import CCRICalculator
 from prana.config import *
 from prana.uhi_lookup import lookup_uhi_offset
@@ -31,7 +31,7 @@ class PRANASystem:
         self.data_fetcher = DataFetcher(api_key, openaq_api_key)
         self.ndt_calculator = NDTCalculator(urban_heat_offset)
         self.ha_aqi_calculator = HAAQICalculator()
-        self.rds_calculator = RDSCalculator(onboarding_data)
+        self.rds_calculator = RecoveryModel(onboarding_data)
         self.ccri_calculator = CCRICalculator()
 
         self.current_ndt = None

@@ -327,18 +327,18 @@ async def register(payload: RegisterRequest) -> RegisterResponse:
 
 def _onboarding_prior_mean(onboarding_data, location_name=None) -> float:
     """Prior mean for personalization = the onboarding-derived indoor offset."""
-    from prana.rds_calculator import RDSCalculator
+    from prana.recovery.model import RecoveryModel
     from prana.prana_system import PRANASystem
-    
+
     # Use PRANASystem's resolver to get the climate zone
     dummy = PRANASystem(location_name=location_name or "default")
-    return RDSCalculator.compute_onboarding_temp_offset(onboarding_data, climate_zone=dummy.climate_zone)
+    return RecoveryModel.compute_onboarding_temp_offset(onboarding_data, climate_zone=dummy.climate_zone)
 
 
 def _onboarding_prior_sd(onboarding_data) -> float:
     """Prior SD for personalization = the onboarding offset band half-width."""
-    from prana.rds_calculator import RDSCalculator
-    return RDSCalculator.compute_band_width(onboarding_data)
+    from prana.recovery.model import RecoveryModel
+    return RecoveryModel.compute_band_width(onboarding_data)
 
 
 def _run_prana_pipeline(payload: RiskRequest, personalization=None, historical_temps=None):
