@@ -128,3 +128,8 @@ CCRI_CRITICAL = 80
 
 # Update frequency (hours)
 UPDATE_INTERVAL = 3
+
+# --- Proactive alert cadence ---
+ALERT_MIN_HOURS_BETWEEN = 24          # at most one proactive alert per user per day
+ALERT_QUIET_HOURS_START = 22          # local hour [0-23]; no alerts at/after this
+ALERT_QUIET_HOURS_END = 7             # local hour [0-23]; no alerts before this

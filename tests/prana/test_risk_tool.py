@@ -1,5 +1,5 @@
 import asyncio
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 from datetime import datetime
 from framework.context.user import UserContext
 from framework.tools.base import ToolRegistry
@@ -17,9 +17,13 @@ def _fake_result():
 def test_get_risk_returns_trimmed_real_keys():
     ctx = UserContext(user_id="u1", metadata={"lat": 13.08, "lon": 80.27,
                                               "location_name": "Chennai"})
-    with patch("prana.ai_tools.risk.PRANASystem") as MockSys:
+    with patch("prana.ai_tools.risk.PRANASystem") as MockSys, \
+         patch("prana.bot.bootstrap.build_rds_repo") as mock_rds_factory, \
+         patch("prana.bot.bootstrap.build_checkin_repo") as mock_checkin_factory:
+        mock_rds_factory.return_value = AsyncMock()
+        mock_checkin_factory.return_value = AsyncMock()
         MockSys.return_value.update_all.return_value = _fake_result()
-        out = get_risk(ctx=ctx)
+        out = asyncio.run(get_risk(ctx=ctx))
     assert out["ccri"] == 72.3 and out["risk_level"] == "HIGH"
     assert out["rds_mid"] == 150.0 and out["consecutive_nights"] == 3
     assert out["as_of"] == "2026-06-26T21:00:00"

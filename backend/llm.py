@@ -7,6 +7,7 @@ understanding, response drafting, and structured extraction only.
 Superseded by framework.ai; retained until all callers migrated.
 """
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -121,21 +122,9 @@ class LLMClient:
 
         # --- DYNAMIC PROFILE OVERRIDE ---
         if user_id and result.get("profile_updates"):
-            from prana.database import SessionLocal
-            from prana.models import UserProfile
-            db = SessionLocal()
-            try:
-                prof = db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
-                if prof:
-                    updates = result["profile_updates"]
-                    if 'floor_level' in updates: prof.floor_level = updates['floor_level']
-                    if 'fan' in updates: prof.has_fan = updates['fan']
-                    if 'windows_open' in updates: prof.windows_open = updates['windows_open']
-                    if 'ac' in updates: prof.has_ac = updates['ac']
-                    db.commit()
-                    _log.info("Applied dynamic profile update for user %s: %s", user_id, updates)
-            finally:
-                db.close()
+            from prana.bot.bootstrap import build_repo
+            asyncio.run(apply_profile_updates(build_repo(), user_id, result["profile_updates"]))
+            _log.info("Applied dynamic profile update for user %s: %s", user_id, result["profile_updates"])
                 
         return result
 
@@ -188,3 +177,16 @@ class LLMClient:
 
 def get_llm_client() -> LLMClient:
     return LLMClient()
+
+
+async def apply_profile_updates(user_repo, user_id: str, updates: dict) -> None:
+    """Merge LLM-extracted onboarding fields into the user's stored profile."""
+    user = await user_repo.get_by_phone(user_id)
+    if not user:
+        return
+    onb = dict(user.metadata.get("onboarding") or {})
+    for key in ("floor_level", "fan", "windows_open", "ac"):
+        if key in updates:
+            onb[key] = updates[key]
+    user.metadata["onboarding"] = onb
+    await user_repo.upsert(user)

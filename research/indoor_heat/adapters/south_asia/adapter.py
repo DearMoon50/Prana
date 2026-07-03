@@ -84,11 +84,12 @@ class SouthAsiaAdapter:
 
     def floor_map(self, site: str) -> dict:
         # canonical floor_level: 'top' if the raw value indicates top floor, else 'other'.
-        # For urban sites (Delhi, Dhaka, Faisalabad), the column is "Floor on top"
+        res = {v: "top" for v in _FLOOR_CANON_TRUE}
+        # For urban sites (Delhi, Dhaka, Faisalabad), the column is often "Floor on top"
         # or "Floor above", so "no" means it IS the top floor.
         if site in ["delhi", "dhaka", "faisalabad"]:
-            return {"no": "top", "0": "top", "false": "top"}
-        return {v: "top" for v in _FLOOR_CANON_TRUE}
+            res.update({"no": "top", "0": "top", "false": "top"})
+        return res
 
     def column_map(self, site: str) -> dict:
         # Harmonize AWS outdoor-temp column name to canonical 'outdoor_temp'.

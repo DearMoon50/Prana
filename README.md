@@ -14,6 +14,12 @@ This repository contains:
 - OpenRouter primary LLM adapter with Ollama fallback
 - Formula validation notes and regression tests
 
+### Known MVP limitations (single-laptop scope)
+
+- CORS defaults to `*` for local development. Restrict `CORS_ORIGINS` before any network-exposed deployment.
+- Rate limiting is in-memory and per-process, which is acceptable for one local Uvicorn worker but not shared across workers.
+- Schema migrations are handled by idempotent `CREATE TABLE IF NOT EXISTS` plus guarded `ALTER TABLE` statements in the SQLite repositories; there is no Alembic layer.
+
 The project is in prototype/backend-hardening stage. CCRI and RDS are PRANA custom scores and should be presented as estimated risk signals, not official medical or government indices.
 
 ## Architecture

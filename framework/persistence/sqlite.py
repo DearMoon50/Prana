@@ -36,6 +36,28 @@ CREATE TABLE IF NOT EXISTS checkins (
 )
 """
 
+_RDS_STATES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS rds_states (
+    user_id TEXT PRIMARY KEY,
+    nighttime_temps_json TEXT NOT NULL,
+    last_updated TEXT
+)
+"""
+
+_RISK_EVALS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS risk_evaluations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    outdoor_temp REAL,
+    outdoor_humidity REAL,
+    base_aqi REAL,
+    ndt REAL,
+    rds_mid REAL,
+    ccri REAL
+)
+"""
+
 
 class SQLiteUserRepository:
     def __init__(self, db_path: str):
@@ -45,6 +67,7 @@ class SQLiteUserRepository:
             for ddl in (
                 "ALTER TABLE users ADD COLUMN verified INTEGER DEFAULT 0",
                 "ALTER TABLE users ADD COLUMN last_alert_level TEXT",
+                "ALTER TABLE users ADD COLUMN last_alert_at TEXT",
             ):
                 try:
                     c.execute(ddl)
@@ -73,6 +96,9 @@ class SQLiteUserRepository:
                 "last_alert_level": (
                     row["last_alert_level"] if "last_alert_level" in row.keys() else None
                 ),
+                "last_alert_at": (
+                    row["last_alert_at"] if "last_alert_at" in row.keys() else None
+                ),
             },
         )
 
@@ -96,8 +122,9 @@ class SQLiteUserRepository:
             c.execute(
                 """INSERT INTO users
                    (user_id, phone, location_name, lat, lon, urban_heat_offset,
-                    onboarding_json, role, locale, created_at, verified, last_alert_level)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    onboarding_json, role, locale, created_at, verified, last_alert_level,
+                    last_alert_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(user_id) DO UPDATE SET
                      phone=excluded.phone, location_name=excluded.location_name,
                      lat=excluded.lat, lon=excluded.lon,
@@ -105,12 +132,14 @@ class SQLiteUserRepository:
                      onboarding_json=excluded.onboarding_json,
                      role=excluded.role, locale=excluded.locale,
                      verified=excluded.verified,
-                     last_alert_level=excluded.last_alert_level""",
+                     last_alert_level=excluded.last_alert_level,
+                     last_alert_at=excluded.last_alert_at""",
                 (user.user_id, user.phone, m.get("location_name"), m.get("lat"), m.get("lon"),
                  m.get("urban_heat_offset"),
                  json.dumps(m.get("onboarding")) if m.get("onboarding") is not None else None,
                  user.role, user.locale, datetime.now(timezone.utc).isoformat(),
-                 1 if m.get("verified") else 0, m.get("last_alert_level")),
+                 1 if m.get("verified") else 0, m.get("last_alert_level"),
+                 m.get("last_alert_at")),
             )
 
     async def list_all(self) -> list[UserContext]:
@@ -180,3 +209,107 @@ class SQLiteCheckinRepository:
             }
             for r in rows
         ]
+
+
+class SQLiteRDSStateRepository:
+    """Stores each user's rolling window of nightly outdoor temps so RDS
+    multi-night compounding survives across sessions. Shares the one DB file."""
+
+    def __init__(self, db_path: str, max_days: int = 4):
+        self.db_path = db_path.replace("sqlite:///", "").replace("sqlite://", "")
+        self.max_days = max_days
+        with self._conn() as c:
+            c.execute(_RDS_STATES_SCHEMA)
+
+    def _conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    async def save(self, user_id: str, nighttime_temps: list) -> None:
+        await asyncio.to_thread(self._save, user_id, nighttime_temps)
+
+    def _save(self, user_id: str, nighttime_temps: list) -> None:
+        from datetime import date as _date, datetime as _dt
+
+        capped = sorted(nighttime_temps, key=lambda t: str(t["date"]), reverse=True)[:self.max_days]
+        serialized = []
+        for t in capped:
+            d = t["date"]
+            if isinstance(d, (_date, _dt)):
+                d = d.isoformat()
+            entry = {"date": d, "temp": t["temp"]}
+            if t.get("humidity") is not None:
+                entry["humidity"] = t["humidity"]
+            serialized.append(entry)
+
+        with self._conn() as c:
+            c.execute(
+                """INSERT INTO rds_states (user_id, nighttime_temps_json, last_updated)
+                   VALUES (?,?,?)
+                   ON CONFLICT(user_id) DO UPDATE SET
+                     nighttime_temps_json=excluded.nighttime_temps_json,
+                     last_updated=excluded.last_updated""",
+                (user_id, json.dumps(serialized), datetime.now(timezone.utc).isoformat()),
+            )
+
+    async def load(self, user_id: str) -> list:
+        return await asyncio.to_thread(self._load, user_id)
+
+    def _load(self, user_id: str) -> list:
+        from datetime import datetime as _dt
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT nighttime_temps_json FROM rds_states WHERE user_id=?", (user_id,)
+            ).fetchone()
+        if not row:
+            return []
+        temps = json.loads(row["nighttime_temps_json"])
+        for t in temps:
+            t["date"] = _dt.fromisoformat(t["date"]).date()
+        return temps
+
+
+class SQLiteRiskEvalRepository:
+    """Append-only per-user risk-score history. Shares the one DB file."""
+
+    def __init__(self, db_path: str):
+        self.db_path = db_path.replace("sqlite:///", "").replace("sqlite://", "")
+        with self._conn() as c:
+            c.execute(_RISK_EVALS_SCHEMA)
+
+    def _conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    async def add(self, user_id: str, *, outdoor_temp, outdoor_humidity,
+                  base_aqi, ndt, rds_mid, ccri) -> None:
+        await asyncio.to_thread(
+            self._add, user_id, outdoor_temp, outdoor_humidity, base_aqi, ndt, rds_mid, ccri
+        )
+
+    def _add(self, user_id, outdoor_temp, outdoor_humidity, base_aqi, ndt, rds_mid, ccri) -> None:
+        with self._conn() as c:
+            c.execute(
+                """INSERT INTO risk_evaluations
+                   (user_id, timestamp, outdoor_temp, outdoor_humidity,
+                    base_aqi, ndt, rds_mid, ccri)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (user_id, datetime.now(timezone.utc).isoformat(),
+                 outdoor_temp, outdoor_humidity, base_aqi, ndt, rds_mid, ccri),
+            )
+
+    async def list_for_user(self, user_id: str, limit: int = 30) -> list:
+        return await asyncio.to_thread(self._list_for_user, user_id, limit)
+
+    def _list_for_user(self, user_id: str, limit: int) -> list:
+        with self._conn() as c:
+            rows = c.execute(
+                """SELECT timestamp, outdoor_temp, outdoor_humidity, base_aqi,
+                          ndt, rds_mid, ccri
+                   FROM risk_evaluations WHERE user_id=?
+                   ORDER BY id DESC LIMIT ?""",
+                (user_id, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]

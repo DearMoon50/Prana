@@ -3,8 +3,8 @@
 import os
 import time
 from collections import defaultdict
-from contextlib import redirect_stdout
-from datetime import datetime
+from contextlib import asynccontextmanager, redirect_stdout
+from datetime import datetime, timezone
 from io import StringIO
 from typing import Any, Dict, Optional
 
@@ -21,21 +21,38 @@ logger = get_logger("api")
 from prana.config import OPENAQ_API_KEY, OPENWEATHER_API_KEY, UPDATE_INTERVAL  # noqa: E402
 from prana.config import RDS_NIGHTTIME_THRESHOLD  # noqa: E402
 from prana.prana_system import PRANASystem  # noqa: E402
-from prana.database import init_db, SessionLocal, save_user_rds_state, load_user_rds_state  # noqa: E402
-from prana.models import User, UserProfile, RiskEvaluation  # noqa: E402
-from prana.bot.bootstrap import build_repo, build_checkin_repo, settings  # noqa: E402
+from prana.bot.bootstrap import (  # noqa: E402
+    build_repo, build_checkin_repo, build_rds_repo, build_risk_eval_repo, settings,
+)
 from prana.personalization import personalize_offset  # noqa: E402
 from framework.context.user import UserContext  # noqa: E402
 from prana.config import WHATSAPP_BOT_NUMBER  # noqa: E402
 
 user_repo = build_repo()
 checkin_repo = build_checkin_repo()
+rds_repo = build_rds_repo()
+risk_eval_repo = build_risk_eval_repo()
+
+
+from prana.scheduler import AlertScheduler  # noqa: E402
+
+_scheduler = AlertScheduler()
+
+
+@asynccontextmanager
+async def lifespan(app):
+    """Manage scheduler lifecycle."""
+    if os.getenv("DISABLE_ALERT_SCHEDULER") != "1":
+        _scheduler.start()
+    yield
+    await _scheduler.stop()
 
 
 app = FastAPI(
     title="PRANA API",
     description="Backend API for PRANA climate risk results and mobile dashboard data.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 _cors_origins = os.getenv("CORS_ORIGINS", "*").split(",")
@@ -49,46 +66,46 @@ app.add_middleware(
 
 from prana.bot.whatsapp_webhook import router as whatsapp_router  # noqa: E402
 app.include_router(whatsapp_router)
-
-from prana.scheduler import AlertScheduler  # noqa: E402
-
-_scheduler = AlertScheduler()
-
-
-@app.on_event("startup")
-async def _on_startup() -> None:
-    """Initialize persistence and schedulers."""
-    init_db()
-    if os.getenv("DISABLE_ALERT_SCHEDULER") != "1":
-        _scheduler.start()
-
-
-@app.on_event("shutdown")
-async def _stop_scheduler() -> None:
-    await _scheduler.stop()
-
-
 # ---------------------------------------------------------------------------
-# Simple in-memory rate limiter
+# Simple in-memory rate limiter with stale record eviction
 # ---------------------------------------------------------------------------
 
 _RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
 _window_store: dict = defaultdict(list)
 
 
+def _evict_stale_windows(now: float) -> None:
+    """Drop client IPs whose entire request window has expired."""
+    cutoff = now - 60
+    stale = [ip for ip, times in _window_store.items() if not times or times[-1] <= cutoff]
+    for ip in stale:
+        del _window_store[ip]
+
+
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
+    _evict_stale_windows(now)
     window = _window_store[client_ip]
     cutoff = now - 60
     window[:] = [t for t in window if t > cutoff]
+
+    # Stale record eviction: if an IP has no active window, clean it up to prevent
+    # memory leaking over time in long-running processes.
+    if not window and client_ip in _window_store:
+        del _window_store[client_ip]
+        window = []
+
     if len(window) >= _RATE_LIMIT:
         logger.warning("Rate limit hit for %s", client_ip)
         return JSONResponse(
             status_code=429,
             content={"detail": "Too many requests. Please try again in a minute."},
         )
+
+    if client_ip not in _window_store:
+        _window_store[client_ip] = window
     window.append(now)
     return await call_next(request)
 
@@ -186,75 +203,54 @@ def health() -> Dict[str, Any]:
 
 @app.post("/risk/current", response_model=RiskResponse)
 async def calculate_current_risk(payload: RiskRequest) -> RiskResponse:
-    """Calculate current PRANA climate risk metrics for a user-selected location.
-
-    When `user_id` is supplied and that user has stored sleep check-ins, the RDS
-    indoor-offset is personalised from those check-ins (Bayesian shrinkage from
-    the onboarding prior). Otherwise scoring is population-only, exactly as before.
-    """
+    """Calculate current PRANA climate risk. When user_id is supplied, seed the
+    RDS ledger + check-in personalization for that user and persist the result."""
     personalization = None
-    db = SessionLocal()
-    try:
-        # Step A: Resolve user profile if user_id present
-        onb_data = payload.onboarding_data or {}
-        loc_name = payload.location_name
-        
-        if payload.user_id:
-            user_prof = db.query(UserProfile).filter(UserProfile.user_id == payload.user_id).first()
-            if user_prof:
-                onb_data = {
-                    'ac': user_prof.has_ac, 'fan': user_prof.has_fan, 
-                    'windows_open': user_prof.windows_open, 'roof_material': user_prof.roof_material,
-                    'floor_level': user_prof.floor_level, 'occupants': user_prof.occupants
-                }
-                loc_name = user_prof.city_name
-            
-            # (Personalization shrinkage from check-ins still uses existing checkin_repo for now, 
-            # but we pass the resolved onb_data)
-            checkins = await checkin_repo.list_for_user(payload.user_id, limit=30)
-            if checkins:
-                prior_mean = _onboarding_prior_mean(onb_data, loc_name)
-                prior_sd = _onboarding_prior_sd(onb_data)
-                post = personalize_offset(prior_mean, prior_sd, checkins, RDS_NIGHTTIME_THRESHOLD)
-                personalization = {"offset": post.mean, "band": post.sd, "n_checkins": post.n_checkins}
+    onb_data = payload.onboarding_data or {}
+    loc_name = payload.location_name
+    historical_temps = []
 
-        # Step B: Load historical rolling RDS temps from ledger
-        historical_temps = load_user_rds_state(db, payload.user_id) if payload.user_id else []
+    if payload.user_id:
+        user = await user_repo.get_by_phone(payload.user_id)
+        if user and user.metadata.get("onboarding"):
+            onb_data = user.metadata["onboarding"]
+            loc_name = user.metadata.get("location_name") or loc_name
 
-        # Step C: Run calculation
-        result, logs = await run_in_threadpool(_run_prana_pipeline, payload, personalization, historical_temps)
-        
-        if not result:
-            raise HTTPException(status_code=502, detail="Risk calculation failed.")
+        checkins = await checkin_repo.list_for_user(payload.user_id, limit=30)
+        if checkins:
+            prior_mean = _onboarding_prior_mean(onb_data, loc_name)
+            prior_sd = _onboarding_prior_sd(onb_data)
+            post = personalize_offset(prior_mean, prior_sd, checkins, RDS_NIGHTTIME_THRESHOLD)
+            personalization = {"offset": post.mean, "band": post.sd, "n_checkins": post.n_checkins}
 
-        # Step D: Save result to persistent ledger
-        if payload.user_id:
-            eval_record = RiskEvaluation(
-                user_id=payload.user_id,
-                outdoor_temp=result.get('raw_temp'),
-                outdoor_humidity=result.get('raw_humidity'),
-                base_aqi=result.get('aqi', {}).get('base_aqi'),
-                calculated_ndt=result.get('ndt'),
-                calculated_rds=result.get('rds', {}).get('rds_mid'),
-                ccri=result.get('ccri')
-            )
-            db.add(eval_record)
-            
-            # Also update the rolling RDS window state
-            save_user_rds_state(db, payload.user_id, result.get('rds_historical_temps', []))
-            
-            db.commit()
+        historical_temps = await rds_repo.load(payload.user_id)
 
-        return RiskResponse(result=_serialize_result(result), calculation_log=logs)
-    finally:
-        db.close()
+    result, logs = await run_in_threadpool(
+        _run_prana_pipeline, payload, personalization, historical_temps
+    )
+    if not result:
+        raise HTTPException(status_code=502, detail="Risk calculation failed.")
+
+    if payload.user_id:
+        await risk_eval_repo.add(
+            payload.user_id,
+            outdoor_temp=result.get("raw_temp"),
+            outdoor_humidity=result.get("raw_humidity"),
+            base_aqi=(result.get("aqi") or {}).get("base_aqi"),
+            ndt=result.get("ndt"),
+            rds_mid=(result.get("rds") or {}).get("rds_mid"),
+            ccri=result.get("ccri"),
+        )
+        await rds_repo.save(payload.user_id, result.get("rds_historical_temps", []))
+
+    return RiskResponse(result=_serialize_result(result), calculation_log=logs)
 
 
 @app.post("/checkin", response_model=CheckinResponse)
 async def record_checkin(payload: CheckinRequest) -> CheckinResponse:
     """Record a nightly sleep check-in. These accumulate as the evidence that
     personalises a user's RDS indoor-offset over time."""
-    checkin_date = payload.checkin_date or datetime.utcnow().date().isoformat()
+    checkin_date = payload.checkin_date or datetime.now(timezone.utc).date().isoformat()
     await checkin_repo.add(
         user_id=payload.user_id,
         checkin_date=checkin_date,
@@ -271,44 +267,35 @@ async def record_checkin(payload: CheckinRequest) -> CheckinResponse:
 
 @app.post("/register", response_model=RegisterResponse)
 async def register(payload: RegisterRequest) -> RegisterResponse:
-    db = SessionLocal()
-    try:
-        # Check if user exists
-        user_row = db.query(User).filter(User.phone_number == payload.phone).first()
-        if not user_row:
-            user_row = User(phone_number=payload.phone)
-            db.add(user_row)
-            db.flush() # Get the ID
-        
-        # Upsert profile
-        prof = db.query(UserProfile).filter(UserProfile.user_id == user_row.id).first()
-        from prana.prana_system import PRANASystem
-        dummy = PRANASystem(location_name=payload.location_name)
-        
-        if not prof:
-            prof = UserProfile(user_id=user_row.id)
-            db.add(prof)
+    """Register a phone + location + home profile through the single shared user
+    repository, so the webhook and scheduler see the same record. Verification is
+    completed later by the user's own inbound WhatsApp message; re-registering an
+    already-verified phone must NOT reset it to unverified."""
+    existing = await user_repo.get_by_phone(payload.phone)
+    verified = bool(existing.metadata.get("verified")) if existing else False
 
-        prof.city_name = payload.location_name
-        prof.resolved_climate_zone = dummy.climate_zone
-        prof.has_ac = payload.onboarding.ac
-        prof.has_fan = payload.onboarding.fan
-        prof.windows_open = payload.onboarding.windows_open
-        prof.roof_material = payload.onboarding.roof_material
-        prof.floor_level = payload.onboarding.floor_level
-        prof.occupants = payload.onboarding.occupants
-        
-        db.commit()
-        
-        return RegisterResponse(
-            ok=True, 
-            user_id=user_row.id, 
-            verified=True, # Prototype simplification
-            whatsapp_link=f"https://wa.me/{WHATSAPP_BOT_NUMBER}?text=PRANA%20START",
-            sandbox_join_code=settings.whatsapp_sandbox_join_code,
-        )
-    finally:
-        db.close()
+    user = UserContext(
+        user_id=payload.phone,
+        phone=payload.phone,
+        metadata={
+            "lat": payload.lat,
+            "lon": payload.lon,
+            "location_name": payload.location_name,
+            "urban_heat_offset": payload.urban_heat_offset,
+            "onboarding": payload.onboarding.model_dump(),
+            "verified": verified,
+            "last_alert_level": existing.metadata.get("last_alert_level") if existing else None,
+        },
+    )
+    await user_repo.upsert(user)
+
+    return RegisterResponse(
+        ok=True,
+        user_id=payload.phone,
+        verified=verified,
+        whatsapp_link=f"https://wa.me/{WHATSAPP_BOT_NUMBER}?text=PRANA%20START",
+        sandbox_join_code=settings.whatsapp_sandbox_join_code,
+    )
 
 
 def _onboarding_prior_mean(onboarding_data, location_name=None) -> float:

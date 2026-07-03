@@ -8,7 +8,7 @@ observation is usable, and persists it.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from framework.context.user import UserContext
 from framework.tools.base import Tool
@@ -79,7 +79,7 @@ async def record_checkin(*, ctx: UserContext, sleep_quality: str) -> dict:
         except Exception:  # noqa: BLE001 - weather is best-effort, never block the check-in
             pass
 
-    checkin_date = datetime.utcnow().date().isoformat()
+    checkin_date = datetime.now(timezone.utc).date().isoformat()
     repo = SQLiteCheckinRepository(DATABASE_URL)
     await repo.add(
         user_id=ctx.user_id,

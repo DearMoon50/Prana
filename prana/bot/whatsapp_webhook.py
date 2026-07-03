@@ -8,7 +8,8 @@ from twilio.request_validator import RequestValidator
 
 from framework import agent as make_agent
 from prana.bot.bootstrap import (
-    build_messaging, build_provider_chain, build_registry, build_repo, settings,
+    build_messaging, build_provider_chain, build_registry, build_repo,
+    build_commands, settings,
 )
 
 router = APIRouter()
@@ -22,6 +23,7 @@ provider = build_provider_chain()
 AUTH_TOKEN = settings.whatsapp_auth_token
 WEBHOOK_URL = f"{settings.whatsapp_webhook_base_url}/webhook/whatsapp"
 validator = RequestValidator(AUTH_TOKEN)
+commands = build_commands()
 
 _ONBOARD = "Welcome to PRANA. Please register in the app first."
 _ACTIVATED = "You're all set! PRANA will alert you when conditions turn risky."
@@ -55,6 +57,13 @@ async def _run_agent_and_reply(phone: str, text: str) -> None:
     user = await user_repo.get_by_phone(phone)
     if user is None:  # deleted between ACK and task run; nothing to reply to
         return
+    # 1. Try shortcut commands first (modular, fast, deterministic)
+    command_reply = await commands.dispatch(text, user)
+    if command_reply:
+        await messaging.send(channel="whatsapp", recipient=phone, body=command_reply)
+        return
+
+    # 2. Fall back to LLM agent (flexible natural language)
     ag = make_agent(provider, registry, max_steps=settings.agent_max_steps,
                     temperature=settings.agent_temperature)
     try:
