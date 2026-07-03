@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import httpx
@@ -19,7 +20,7 @@ def test_openrouter_parses_content_and_usage():
         })
     )
     p = OpenRouterProvider(api_key="k", model="m")
-    r = p.chat([Message(Role.USER, "hi")])
+    r = asyncio.run(p.chat([Message(Role.USER, "hi")]))
     assert r.content == "hello"
     assert r.usage.prompt_tokens == 10 and r.usage.completion_tokens == 3
 
@@ -34,7 +35,7 @@ def test_openrouter_parses_tool_calls():
             "usage": {"prompt_tokens": 1, "completion_tokens": 1},
         })
     )
-    r = OpenRouterProvider(api_key="k", model="m").chat([Message(Role.USER, "hi")])
+    r = asyncio.run(OpenRouterProvider(api_key="k", model="m").chat([Message(Role.USER, "hi")]))
     assert r.tool_calls[0].name == "get_risk" and r.tool_calls[0].arguments == {"x": 1}
 
 
@@ -44,12 +45,12 @@ def test_openrouter_http_error_raises_provider_error():
         return_value=httpx.Response(500, json={"error": "boom"})
     )
     with pytest.raises(ProviderError):
-        OpenRouterProvider(api_key="k", model="m").chat([Message(Role.USER, "hi")])
+        asyncio.run(OpenRouterProvider(api_key="k", model="m").chat([Message(Role.USER, "hi")]))
 
 
 def test_openrouter_missing_key_raises():
     with pytest.raises(ProviderError):
-        OpenRouterProvider(api_key="", model="m").chat([Message(Role.USER, "hi")])
+        asyncio.run(OpenRouterProvider(api_key="", model="m").chat([Message(Role.USER, "hi")]))
 
 
 _GET_RISK_SCHEMA = {
@@ -64,7 +65,7 @@ def test_ollama_parses_content():
     respx.post("http://127.0.0.1:11434/api/chat").mock(
         return_value=httpx.Response(200, json={"message": {"content": "local reply"}})
     )
-    r = OllamaProvider(model="llama3").chat([Message(Role.USER, "hi")])
+    r = asyncio.run(OllamaProvider(model="llama3").chat([Message(Role.USER, "hi")]))
     assert r.content == "local reply" and r.tool_calls == []
 
 
@@ -77,8 +78,8 @@ def test_ollama_react_text_tool_call_populates_tool_calls():
             "content": '```json\n{"tool": "get_risk", "args": {}}\n```'
         }})
     )
-    r = OllamaProvider(model="phi4-mini").chat(
-        [Message(Role.USER, "what is my risk")], tools=[_GET_RISK_SCHEMA])
+    r = asyncio.run(OllamaProvider(model="phi4-mini").chat(
+        [Message(Role.USER, "what is my risk")], tools=[_GET_RISK_SCHEMA]))
     assert r.content is None
     assert r.tool_calls[0].name == "get_risk" and r.tool_calls[0].arguments == {}
 
@@ -96,8 +97,8 @@ def test_ollama_native_tool_call_populates_tool_calls():
             ],
         }})
     )
-    r = OllamaProvider(model="gpt-oss:20b-cloud").chat(
-        [Message(Role.USER, "hi")], tools=[_GET_RISK_SCHEMA])
+    r = asyncio.run(OllamaProvider(model="gpt-oss:20b-cloud").chat(
+        [Message(Role.USER, "hi")], tools=[_GET_RISK_SCHEMA]))
     assert r.tool_calls[0].name == "get_risk" and r.tool_calls[0].arguments == {}
 
 
@@ -108,8 +109,8 @@ def test_ollama_react_plain_answer_sets_content():
             "content": '{"answer": "you are safe"}'
         }})
     )
-    r = OllamaProvider(model="phi4-mini").chat(
-        [Message(Role.USER, "am i safe")], tools=[_GET_RISK_SCHEMA])
+    r = asyncio.run(OllamaProvider(model="phi4-mini").chat(
+        [Message(Role.USER, "am i safe")], tools=[_GET_RISK_SCHEMA]))
     assert r.content == "you are safe" and r.tool_calls == []
 
 
@@ -125,7 +126,7 @@ def test_gemini_parses_text_and_function_call():
             ]}}],
         })
     )
-    r = GeminiProvider(api_key="k", model="gemini-2.0-flash").chat([Message(Role.USER, "hi")])
+    r = asyncio.run(GeminiProvider(api_key="k", model="gemini-2.0-flash").chat([Message(Role.USER, "hi")]))
     assert r.content == "hello"
     assert r.tool_calls[0].name == "get_risk" and r.tool_calls[0].arguments == {"x": 1}
 
@@ -136,12 +137,12 @@ def test_gemini_http_error_raises_provider_error():
         url__startswith="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
     ).mock(return_value=httpx.Response(500, json={"error": "boom"}))
     with pytest.raises(ProviderError):
-        GeminiProvider(api_key="k", model="gemini-2.0-flash").chat([Message(Role.USER, "hi")])
+        asyncio.run(GeminiProvider(api_key="k", model="gemini-2.0-flash").chat([Message(Role.USER, "hi")]))
 
 
 def test_gemini_missing_key_raises():
     with pytest.raises(ProviderError):
-        GeminiProvider(api_key="", model="gemini-2.0-flash").chat([Message(Role.USER, "hi")])
+        asyncio.run(GeminiProvider(api_key="", model="gemini-2.0-flash").chat([Message(Role.USER, "hi")]))
 
 
 @respx.mock
@@ -155,6 +156,6 @@ def test_gemini_function_call_only_content_is_none():
             ]}}],
         })
     )
-    r = GeminiProvider(api_key="k", model="gemini-2.0-flash").chat([Message(Role.USER, "hi")])
+    r = asyncio.run(GeminiProvider(api_key="k", model="gemini-2.0-flash").chat([Message(Role.USER, "hi")]))
     assert r.content is None
     assert r.tool_calls[0].name == "get_risk" and r.tool_calls[0].arguments == {"x": 1}
