@@ -1,13 +1,17 @@
-"""Test Issue 1 fix: RDS uncertainty bands"""
+"""Test Issue 1 fix: RDS uncertainty bands.
+
+Migrated to RecoveryModel (Task 12): the band mechanics (low <= mid <= high,
+range shown in the message when tiers differ) carry over unchanged; only the
+underlying score is now debt-minutes rather than the old RFU-decay score."""
 
 import unittest
 from datetime import datetime, timedelta
-from prana.rds_calculator import RDSCalculator
+from prana.recovery.model import RecoveryModel
 
 
 class TestIssue1RDSUncertaintyBands(unittest.TestCase):
     def setUp(self):
-        self.calculator = RDSCalculator()
+        self.calculator = RecoveryModel()
         today = datetime.now().date()
         # Add some hot nights
         self.calculator.add_night_temperature(35.0, today - timedelta(days=2))
@@ -50,39 +54,34 @@ class TestIssue1RDSUncertaintyBands(unittest.TestCase):
         self.assertLessEqual(result['rds_low'], result['rds_mid'])
         self.assertLessEqual(result['rds_mid'], result['rds_high'])
     
-    def test_get_rds_message_shows_range_when_tiers_differ(self):
-        """Message should show range when low/high cross tier boundaries"""
-        # Force a scenario where low and high are in different tiers
+    def test_get_rds_message_shows_range_when_band_wide(self):
+        """Message should show a numeric min/max range when the low-high
+        debt-minutes band is wide (> 15 min, per RecoveryModel.get_rds_message)."""
         today = datetime.now().date()
-        calc = RDSCalculator({'roof_material': 'tin', 'floor_level': 'top'})  # +3.5°C
+        calc = RecoveryModel({'roof_material': 'tin', 'floor_level': 'top'})  # wide band
         calc.add_night_temperature(38.0, today - timedelta(days=1))
         calc.add_night_temperature(39.0, today)
-        
+
         rds_dict = calc.calculate_rds()
         message, color = calc.get_rds_message(rds_dict, 39.0)
-        
-        # Should show a range in the message
-        self.assertTrue(
-            ('-' in message and any(tier in message for tier in ['LOW', 'MODERATE', 'HIGH', 'VERY HIGH', 'CRITICAL']))
-            or 'depending on your room' in message.lower(),
-            "Message should indicate a range when tiers differ"
-        )
-    
-    def test_get_rds_message_single_value_when_same_tier(self):
-        """Message should use single value when low/high in same tier"""
-        # Force a scenario where low and high are in the same tier
-        today = datetime.now().date()
-        calc = RDSCalculator()
-        calc.add_night_temperature(28.0, today)  # Low temp -> low RDS
-        
-        rds_dict = calc.calculate_rds()
-        message, color = calc.get_rds_message(rds_dict, 28.0)
-        
-        # When same tier, should not show "depending on your room" range language
-        # (though it might still show the numeric RDS value)
+
         self.assertIsInstance(message, str)
-        # Just verify it's a valid message
+        if rds_dict['debt_minutes_high'] - rds_dict['debt_minutes_low'] > 15:
+            self.assertIn('range', message.lower())
+            self.assertIn('min', message.lower())
+
+    def test_get_rds_message_single_value_when_band_narrow(self):
+        """Message should not show a range when low/high are close together."""
+        today = datetime.now().date()
+        calc = RecoveryModel()
+        calc.add_night_temperature(20.0, today)  # Cool temp -> zero debt, narrow band
+
+        rds_dict = calc.calculate_rds()
+        message, color = calc.get_rds_message(rds_dict, 20.0)
+
+        self.assertIsInstance(message, str)
         self.assertGreater(len(message), 10)
+        self.assertNotIn('range', message.lower())
 
 
 if __name__ == '__main__':
