@@ -61,6 +61,14 @@ class CCRICalculator:
         """Convert RDS into a capped 0-100 component score."""
         return max(0, min(100, rds))
 
+    def to_ccri_recovery_score(self, debt_minutes):
+        """Map raw sleep-debt minutes to the 0-100 recovery component score.
+
+        A full RECOVERY_DEBT_CAP_MIN of debt maps to 100.
+        """
+        from prana.config import RECOVERY_DEBT_CAP_MIN
+        return max(0.0, min(100.0, debt_minutes / RECOVERY_DEBT_CAP_MIN * 100.0))
+
     def recovery_score_to_multiplier(self, rds_mid):
         """
         Convert RDS to recovery multiplier using piecewise scaling.
