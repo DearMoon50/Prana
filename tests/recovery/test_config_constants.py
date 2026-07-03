@@ -13,7 +13,8 @@ def test_sleep_loss_anchors_are_monotonic_nonneg():
 
 def test_ledger_constants_present_and_sane():
     assert config.RECOVERY_DEBT_CAP_MIN == 240
-    assert config.RECOVERY_PER_COOL_NIGHT_MIN == 14
+    assert config.RECOVERY_PER_COOL_NIGHT_MIN == 45
+    assert config.RECOVERY_NIGHT_LOSS_THRESHOLD_MIN == 5
     assert config.RECOVERY_WINDOW_NIGHTS == 7
     assert config.HOT_CLIMATE_SLEEP_MULTIPLIER == 1.0
     # tiers strictly ascending and below the cap

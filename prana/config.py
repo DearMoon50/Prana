@@ -144,7 +144,8 @@ SLEEP_LOSS_ANCHORS = [
 
 # Debt ledger dynamics (minutes).
 RECOVERY_DEBT_CAP_MIN = 240          # ~4h max carried debt; replaces the old 100 cap
-RECOVERY_PER_COOL_NIGHT_MIN = 14     # minutes of debt cleared by one fully-cool night
+RECOVERY_PER_COOL_NIGHT_MIN = 45     # minutes of debt cleared by one fully-cool night
+RECOVERY_NIGHT_LOSS_THRESHOLD_MIN = 5  # a night losing < this counts as a recovering night
 RECOVERY_WINDOW_NIGHTS = 7           # nights of history the ledger walks
 HOT_CLIMATE_SLEEP_MULTIPLIER = 1.0   # knob for Minor's 2.5-3x low-income finding (default off)
 
