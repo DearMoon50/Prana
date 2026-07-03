@@ -25,6 +25,7 @@ class Message:
     content: str
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
+    name: str | None = None
 
 
 @dataclass
@@ -62,7 +63,7 @@ class LLMProvider(Protocol):
     name: str
     supports_native_tools: bool
 
-    def chat(
+    async def chat(
         self,
         messages: list[Message],
         *,

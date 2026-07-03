@@ -19,7 +19,7 @@ class MockProvider:
         self._error = error
         self.calls: list[dict] = []
 
-    def chat(
+    async def chat(
         self,
         messages: list[Message],
         *,

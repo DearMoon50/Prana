@@ -22,16 +22,19 @@ from prana.config import OPENAQ_API_KEY, OPENWEATHER_API_KEY, UPDATE_INTERVAL  #
 from prana.config import RDS_NIGHTTIME_THRESHOLD  # noqa: E402
 from prana.prana_system import PRANASystem  # noqa: E402
 from prana.bot.bootstrap import (  # noqa: E402
-    build_repo, build_checkin_repo, build_rds_repo, build_risk_eval_repo, settings,
+    build_repo, build_checkin_repo, build_rds_repo, build_risk_eval_repo,
+    build_household_repo, settings,
 )
 from prana.personalization import personalize_offset  # noqa: E402
 from framework.context.user import UserContext  # noqa: E402
 from prana.config import WHATSAPP_BOT_NUMBER  # noqa: E402
+from enum import Enum
 
 user_repo = build_repo()
 checkin_repo = build_checkin_repo()
 rds_repo = build_rds_repo()
 risk_eval_repo = build_risk_eval_repo()
+household_repo = build_household_repo()
 
 
 from prana.scheduler import AlertScheduler  # noqa: E402
@@ -185,6 +188,30 @@ class RegisterResponse(BaseModel):
     verified: bool
     whatsapp_link: str
     sandbox_join_code: str
+
+
+class TagEnum(str, Enum):
+    CHILD = "child"
+    TEEN = "teen"
+    ADULT = "adult"
+    WOMAN = "woman"
+    ELDERLY = "elderly"
+
+
+class HouseholdMemberAdd(BaseModel):
+    user_id: str = Field(..., min_length=1, max_length=64)
+    name: str = Field(..., min_length=1, max_length=60)
+    tag: TagEnum
+    outdoor_worker: bool = False
+
+
+class HouseholdMember(BaseModel):
+    id: int
+    user_id: str
+    name: str
+    tag: TagEnum
+    outdoor_worker: bool
+    created_at: str
 
 
 @app.get("/health")
@@ -351,3 +378,32 @@ def _serialize_result(result: dict) -> dict:
     if isinstance(result, datetime):
         return result.isoformat()
     return result
+
+
+@app.post("/household/members", response_model=HouseholdMember)
+async def add_household_member(payload: HouseholdMemberAdd) -> Any:
+    """Add a new member to the user's household for vulnerability-track tagging."""
+    member_id = await household_repo.add(
+        payload.user_id, payload.name, payload.tag.value, payload.outdoor_worker
+    )
+    members = await household_repo.list_for_user(payload.user_id)
+    # The member is the one we just added (or we could fetch by ID)
+    for m in members:
+        if m["id"] == member_id:
+            return m
+    raise HTTPException(status_code=500, detail="Failed to retrieve newly added member.")
+
+
+@app.get("/household/members", response_model=list[HouseholdMember])
+async def list_household_members(user_id: str) -> list[dict]:
+    """Retrieve all tagged members in a user's household."""
+    return await household_repo.list_for_user(user_id)
+
+
+@app.delete("/household/members/{id}")
+async def delete_household_member(id: int) -> dict:
+    """Remove a household member tag."""
+    ok = await household_repo.delete(id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Member not found.")
+    return {"ok": True}

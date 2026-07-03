@@ -8,8 +8,10 @@ from framework.messaging.whatsapp import TwilioWhatsAppChannel
 from framework.persistence.sqlite import (
     SQLiteUserRepository, SQLiteCheckinRepository,
     SQLiteRDSStateRepository, SQLiteRiskEvalRepository,
+    SQLiteHouseholdRepository,
 )
 from framework.tools.base import ToolRegistry
+from framework.context.user import UserContext
 from prana.ai_tools.risk import risk_tool
 from prana.ai_tools.checkin import record_checkin_tool
 from prana.config import DATABASE_URL
@@ -18,40 +20,62 @@ from prana.bot.commands import CommandRegistry, handle_help, handle_risk, handle
 settings = FrameworkSettings()
 
 
+_cache = {}
+
 def build_registry() -> ToolRegistry:
-    reg = ToolRegistry()
-    reg.register(risk_tool)
-    reg.register(record_checkin_tool)
-    return reg
+    if "registry" not in _cache:
+        reg = ToolRegistry()
+        reg.register(risk_tool)
+        reg.register(record_checkin_tool)
+        _cache["registry"] = reg
+    return _cache["registry"]
 
 
 def build_provider_chain():
-    return build_provider(settings)
+    if "provider" not in _cache:
+        _cache["provider"] = build_provider(settings)
+    return _cache["provider"]
 
 
 def build_messaging() -> MessagingRegistry:
-    reg = MessagingRegistry()
-    reg.add(TwilioWhatsAppChannel(
-        settings.whatsapp_account_sid, settings.whatsapp_auth_token, settings.whatsapp_from_number,
-    ))
-    return reg
+    if "messaging" not in _cache:
+        reg = MessagingRegistry()
+        reg.add(TwilioWhatsAppChannel(
+            settings.whatsapp_account_sid, settings.whatsapp_auth_token, settings.whatsapp_from_number,
+        ))
+        _cache["messaging"] = reg
+    return _cache["messaging"]
 
 
 def build_repo() -> SQLiteUserRepository:
-    return SQLiteUserRepository(DATABASE_URL)
+    if "user_repo" not in _cache:
+        _cache["user_repo"] = SQLiteUserRepository(DATABASE_URL)
+    return _cache["user_repo"]
 
 
 def build_checkin_repo() -> SQLiteCheckinRepository:
-    return SQLiteCheckinRepository(DATABASE_URL)
+    if "checkin_repo" not in _cache:
+        _cache["checkin_repo"] = SQLiteCheckinRepository(DATABASE_URL)
+    return _cache["checkin_repo"]
 
 
 def build_rds_repo() -> SQLiteRDSStateRepository:
-    from prana.config import RDS_MAX_DAYS
-    return SQLiteRDSStateRepository(DATABASE_URL, max_days=RDS_MAX_DAYS)
+    if "rds_repo" not in _cache:
+        from prana.config import RDS_MAX_DAYS
+        _cache["rds_repo"] = SQLiteRDSStateRepository(DATABASE_URL, max_days=RDS_MAX_DAYS)
+    return _cache["rds_repo"]
 
 
 def build_risk_eval_repo() -> SQLiteRiskEvalRepository:
-    return SQLiteRiskEvalRepository(DATABASE_URL)
+    if "risk_eval_repo" not in _cache:
+        _cache["risk_eval_repo"] = SQLiteRiskEvalRepository(DATABASE_URL)
+    return _cache["risk_eval_repo"]
+
+
+def build_household_repo() -> SQLiteHouseholdRepository:
+    if "household_repo" not in _cache:
+        _cache["household_repo"] = SQLiteHouseholdRepository(DATABASE_URL)
+    return _cache["household_repo"]
 
 
 def build_commands() -> CommandRegistry:

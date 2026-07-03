@@ -60,3 +60,5 @@ Thumbs.db
 
 # Research outputs
 research/indoor_heat/**/outputs/
+brain/
+archive(1).zip

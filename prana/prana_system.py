@@ -45,17 +45,17 @@ class PRANASystem:
     def _resolve_climate_zone(self, location_name):
         """Determine climate zone ('hot_humid', 'hot_dry', or 'default') for RDS logic.
         
-        Chennai, Dhaka, Ho Chi Minh, Jakarta, Manila -> hot_humid (Coastal/Tropical)
-        Karachi, Delhi -> hot_dry (Arid/Semi-Arid)
+        Hot Humid (Coastal/Tropical): Chennai, Dhaka, Ho Chi Minh, Jakarta, Manila.
+        Hot Dry (Arid/Semi-Arid): Delhi, Karachi, Faisalabad.
         """
         loc = str(location_name).lower()
-        if any(city in loc for city in ["chennai", "dhaka", "ho chi minh", "jakarta", "manila", "faisalabad"]):
-            # Note: Faisalabad is dry but tends to be humid in monsoon; 
-            # following coastal/humid as a conservative baseline for SE Asia cities.
-            # Dhaka is the primary hot_humid reference.
-            if "dhaka" in loc or "chennai" in loc or "manila" in loc:
-                return "hot_humid"
-        if any(city in loc for city in ["delhi", "karachi"]):
+        
+        # Hot-humid cities (Nature Sci Data 10.1038/s41597-022-01314-5 targets)
+        if any(city in loc for city in ["chennai", "dhaka", "ho chi minh", "jakarta", "manila"]):
+            return "hot_humid"
+            
+        # Hot-dry cities
+        if any(city in loc for city in ["delhi", "karachi", "faisalabad"]):
             return "hot_dry"
         
         # Defensive default: if we don't know the climate, assume humid for safety

@@ -91,7 +91,7 @@ async def receive(request: Request, background: BackgroundTasks) -> Response:
         await messaging.send(channel="whatsapp", recipient=phone, body=_ONBOARD)
         return Response(status_code=200)
 
-    if not user.metadata.get("verified", True):
+    if not user.metadata.get("verified", False):
         user.metadata["verified"] = True
         await user_repo.upsert(user)
         await messaging.send(channel="whatsapp", recipient=phone, body=_ACTIVATED)

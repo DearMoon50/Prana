@@ -59,7 +59,7 @@ class Agent:
             # Always offer tools; each provider adapts to its own tool-calling
             # style (native API or ReAct text) and returns a normalized
             # ChatResponse with tool_calls populated when a call is requested.
-            resp = self.provider.chat(
+            resp = await self.provider.chat(
                 messages, tools=self.registry.schemas(), temperature=self.temperature
             )
             tool_calls = resp.tool_calls
@@ -84,6 +84,7 @@ class Agent:
                         Role.TOOL,
                         content=f"<tool_result>{json.dumps(payload, default=str)}</tool_result>",
                         tool_call_id=call.id,
+                        name=call.name,
                     )
                 )
 
