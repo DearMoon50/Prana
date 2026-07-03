@@ -11,8 +11,10 @@ from prana.config import (
     RECOVERY_TIER_MODERATE_MIN,
     RECOVERY_TIER_HIGH_MIN,
     RECOVERY_TIER_SEVERE_MIN,
+    RECOVERY_DEBT_CAP_MIN,
 )
 from prana.recovery import indoor_climate
+from prana.recovery import ledger
 from prana.recovery.forecast import select_night_date
 from backend.logger import get_logger
 
@@ -80,3 +82,92 @@ class RecoveryModel:
         if debt_minutes >= RECOVERY_TIER_MODERATE_MIN:
             return "MODERATE"
         return "LOW"
+
+    # --- core computation ---
+    def _debt_for_offset_shift(self, offset_shift, personalized_offset,
+                               onboarding_data, climate_zone):
+        """Accumulate debt walking nights oldest-first at a given band shift."""
+        onb = onboarding_data or self.onboarding_data
+        sorted_nights = sorted(self.nighttime_temps, key=lambda x: x['date'])  # oldest first
+        ledger_nights = []
+        for night in sorted_nights:
+            if personalized_offset is not None:
+                offset = float(personalized_offset)
+            else:
+                offset = indoor_climate.compute_onboarding_temp_offset(
+                    onb, outdoor_temp=night['temp'], climate_zone=climate_zone
+                )
+            offset += offset_shift
+            eff = indoor_climate.effective_indoor_temp(night['temp'], offset)
+            ledger_nights.append({
+                'effective_temp': eff,
+                'humidity': night.get('humidity'),
+                'hot_climate': False,
+            })
+        return ledger.accumulate_debt(ledger_nights)
+
+    def _consecutive_impaired_nights(self, personalized_offset, onboarding_data, climate_zone):
+        """Count consecutive most-recent nights with non-zero sleep loss."""
+        from prana.recovery.dose_response import minutes_lost
+        onb = onboarding_data or self.onboarding_data
+        sorted_nights = sorted(self.nighttime_temps, key=lambda x: x['date'], reverse=True)
+        count = 0
+        for night in sorted_nights:
+            if personalized_offset is not None:
+                offset = float(personalized_offset)
+            else:
+                offset = indoor_climate.compute_onboarding_temp_offset(
+                    onb, outdoor_temp=night['temp'], climate_zone=climate_zone
+                )
+            eff = indoor_climate.effective_indoor_temp(night['temp'], offset)
+            if minutes_lost(eff, humidity=night.get('humidity')) > 0:
+                count += 1
+            else:
+                break
+        return count
+
+    def calculate_rds(self, debug=False, outdoor_night_temp=None,
+                      onboarding_data=None, climate_zone="default",
+                      personalized_offset=None, personalized_band=None):
+        """Compute sleep-debt (minutes) with an uncertainty band, plus a
+        legacy-compatible 0-100 projection (debt / CAP * 100)."""
+        personalized = personalized_offset is not None
+        if not self.nighttime_temps:
+            return {
+                'rds_low': 0.0, 'rds_mid': 0.0, 'rds_high': 0.0,
+                'consecutive_nights': 0, 'personalized': personalized,
+                'debt_minutes_low': 0.0, 'debt_minutes_mid': 0.0,
+                'debt_minutes_high': 0.0, 'tier': 'LOW',
+            }
+
+        if personalized_offset is not None:
+            band_width = (personalized_band if personalized_band is not None
+                          else self.compute_band_width(onboarding_data or self.onboarding_data))
+        else:
+            band_width = self.compute_band_width(onboarding_data or self.onboarding_data)
+
+        # low = cooler room (more negative offset) -> less debt; high = hotter room.
+        debt_mid = self._debt_for_offset_shift(0.0, personalized_offset, onboarding_data, climate_zone)
+        debt_low = self._debt_for_offset_shift(-band_width, personalized_offset, onboarding_data, climate_zone)
+        debt_high = self._debt_for_offset_shift(+band_width, personalized_offset, onboarding_data, climate_zone)
+
+        consecutive = self._consecutive_impaired_nights(personalized_offset, onboarding_data, climate_zone)
+
+        def to_scale(d):
+            return round(min(100.0, d / RECOVERY_DEBT_CAP_MIN * 100.0), 1)
+
+        result = {
+            'rds_low': to_scale(debt_low),
+            'rds_mid': to_scale(debt_mid),
+            'rds_high': to_scale(debt_high),
+            'consecutive_nights': consecutive,
+            'personalized': personalized,
+            'debt_minutes_low': round(debt_low, 1),
+            'debt_minutes_mid': round(debt_mid, 1),
+            'debt_minutes_high': round(debt_high, 1),
+            'tier': self.classify_tier(debt_mid),
+        }
+        if debug:
+            _log.debug("Recovery debt (low/mid/high min): %.1f / %.1f / %.1f | tier=%s",
+                       debt_low, debt_mid, debt_high, result['tier'])
+        return result
